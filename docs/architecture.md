@@ -18,7 +18,7 @@ Saruman es un microservicio Go que reemplaza lógica de n8n para Vincula Latam. 
 |-----------|----------|---------|
 | Router HTTP | `go-chi/chi/v5` | v5.2.5 |
 | MySQL Driver | `go-sql-driver/mysql` | v1.9.3 |
-| Config | `spf13/viper` | v1.21.0 |
+| YAML Config | `go.yaml.in/yaml/v3` | v3.0.4 |
 | Logging | `uber-go/zap` | v1.27.1 |
 | UUID | `google/uuid` | v1.6.0 |
 
@@ -28,13 +28,18 @@ Saruman es un microservicio Go que reemplaza lógica de n8n para Vincula Latam. 
 
 ```
 saruman/
+├── .vscode/
+│   └── launch.json                  # Config de debug para VS Code
 ├── cmd/
 │   └── server/
 │       └── main.go                  # Bootstrap: config → DB → DI → server
 ├── internal/
+│   ├── commons/
+│   │   └── config.go                # LoadConfig(): lee YAML y parsea a Config struct
 │   ├── config/
-│   │   └── config.go                # Viper: carga config desde env vars
-│   ├── platform/
+│   │   ├── config.go                # Structs: Config, ServerConfig, DatabaseConfig, LogConfig
+│   │   └── config.yaml              # Archivo YAML con valores de configuración
+│   ├── infrastructure/
 │   │   ├── logger/
 │   │   │   └── logger.go            # Factory de Zap logger (JSON producción)
 │   │   └── mysql/
@@ -43,13 +48,17 @@ saruman/
 │   │   └── errors.go                # ValidationError, InternalError
 │   ├── domain/
 │   │   └── product.go               # Entidad Product + AvailableStock()
+│   ├── dto/
+│   │   └── dto.go                   # SearchProductsRequest/Response, ProductDTO
 │   ├── product/
-│   │   ├── ports.go                 # Interfaces: SearchUseCase, Service, Repository
-│   │   ├── dto.go                   # SearchProductsRequest/Response, ProductDTO
-│   │   ├── repository.go            # MySQL: FindByIDsAndCompany (IN clause dinámica)
-│   │   ├── service.go               # Lógica: encontrados vs no encontrados
-│   │   ├── usecase.go               # Orquestación: service → ProductDTO mapping
-│   │   ├── controller.go            # HTTP handler: parse, validate, respond
+│   │   ├── controller/
+│   │   │   └── get_products_controller.go  # HTTP handler: parse, validate, respond
+│   │   ├── repository/
+│   │   │   └── products_repository.go      # MySQL: FindByIDsAndCompany (IN clause dinámica)
+│   │   ├── service/
+│   │   │   └── products_service.go         # Lógica: encontrados vs no encontrados
+│   │   ├── usecase/
+│   │   │   └── search_products_use_case.go # Orquestación: service → ProductDTO mapping
 │   │   └── wire.go                  # DI local: repo → service → usecase → controller
 │   └── server/
 │       ├── router.go                # Chi router + middleware + rutas
@@ -60,7 +69,8 @@ saruman/
 │   └── mvp-product-search.md        # Spec del MVP
 ├── .env.example
 ├── go.mod
-└── Makefile
+├── Makefile
+└── README.md
 ```
 
 ---
@@ -71,33 +81,33 @@ saruman/
 HTTP Request
     │
     ▼
-┌─────────────────────────────────────────┐
-│  Controller (internal/product/controller)│  Parseo JSON, validación de schema,
-│                                         │  HTTP status codes, serialización
-└────────────────┬────────────────────────┘
-                 │  SearchProductsRequest
+┌──────────────────────────────────────────────────┐
+│  Controller (internal/product/controller/)       │  Parseo JSON, validación de schema,
+│                                                  │  HTTP status codes, serialización
+└────────────────┬─────────────────────────────────┘
+                 │  dto.SearchProductsRequest
                  ▼
-┌─────────────────────────────────────────┐
-│  UseCase (internal/product/usecase)     │  Orquestación del flujo,
-│                                         │  mapeo domain → DTO
-└────────────────┬────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  UseCase (internal/product/usecase/)             │  Orquestación del flujo,
+│                                                  │  mapeo domain → DTO
+└────────────────┬─────────────────────────────────┘
                  │  (ids []int, companyID int)
                  ▼
-┌─────────────────────────────────────────┐
-│  Service (internal/product/service)     │  Lógica de dominio: comparar IDs
-│                                         │  pedidos vs encontrados → notFoundIDs
-└────────────────┬────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  Service (internal/product/service/)             │  Lógica de dominio: comparar IDs
+│                                                  │  pedidos vs encontrados → notFoundIDs
+└────────────────┬─────────────────────────────────┘
                  │  (ids []int, companyID int)
                  ▼
-┌─────────────────────────────────────────┐
-│  Repository (internal/product/repository)│  Query SQL pura, mapeo rows → domain
-└────────────────┬────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  Repository (internal/product/repository/)       │  Query SQL pura, mapeo rows → domain
+└────────────────┬─────────────────────────────────┘
                  │
                  ▼
             MySQL (Product table)
 ```
 
-Cada capa depende solo de **interfaces** (definidas en `ports.go`), nunca de implementaciones concretas.
+Cada capa depende solo de **interfaces**, nunca de implementaciones concretas. Los DTOs están centralizados en `internal/dto/`.
 
 ### Inyección de Dependencias
 
@@ -105,11 +115,11 @@ DI manual sin framework. `wire.go` por módulo construye el grafo local:
 
 ```go
 // internal/product/wire.go
-func NewModule(db *sql.DB, logger *zap.Logger) *Controller {
-    repo := NewMySQLRepository(db)      // Repository
-    svc  := NewService(repo)            // Service
-    uc   := NewSearchUseCase(svc)       // UseCase
-    return NewController(uc, logger)    // Controller
+func NewModule(db *sql.DB, logger *zap.Logger) *controller.Controller {
+    repo := repository.NewMySQLRepository(db)      // Repository
+    svc  := service.NewService(repo)               // Service
+    uc   := usecase.NewSearchUseCase(svc)           // UseCase
+    return controller.NewController(uc, logger)    // Controller
 }
 ```
 
@@ -195,20 +205,46 @@ Tres middleware aplicados en orden en el router Chi:
 
 ## 7. Configuración
 
-Variables de entorno cargadas con Viper (`internal/config/config.go`):
+La configuración se carga desde `internal/config/config.yaml` usando `commons.LoadConfig()` (`internal/commons/config.go`), que lee el archivo YAML y lo deserializa en structs definidas en `internal/config/config.go`.
 
-| Variable | Default | Descripción |
-|----------|---------|-------------|
-| `SERVER_PORT` | `8080` | Puerto HTTP |
-| `DB_HOST` | `localhost` | Host MySQL |
-| `DB_PORT` | `3306` | Puerto MySQL |
-| `DB_USER` | `saruman` | Usuario MySQL |
-| `DB_PASSWORD` | `secret` | Password MySQL |
-| `DB_NAME` | `vincula` | Base de datos |
-| `DB_MAX_OPEN_CONNS` | `25` | Pool: conexiones abiertas máximas |
-| `DB_MAX_IDLE_CONNS` | `5` | Pool: conexiones idle máximas |
-| `DB_CONN_MAX_LIFETIME` | `5m` | Pool: lifetime máximo por conexión |
-| `LOG_LEVEL` | `info` | Nivel de log (debug/info/warn/error) |
+**Archivo `internal/config/config.yaml`:**
+```yaml
+server:
+  port: 8080
+database:
+  host: localhost
+  port: 3306
+  user: saruman
+  password: secret
+  name: vincula
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 5m
+log:
+  level: info
+```
+
+**Structs de configuración (`internal/config/config.go`):**
+```go
+type Config struct {
+    Server   ServerConfig   `yaml:"server"`
+    Database DatabaseConfig `yaml:"database"`
+    Log      LogConfig      `yaml:"log"`
+}
+```
+
+| Sección | Campo | Descripción |
+|---------|-------|-------------|
+| `server` | `port` | Puerto HTTP |
+| `database` | `host` | Host MySQL |
+| `database` | `port` | Puerto MySQL |
+| `database` | `user` | Usuario MySQL |
+| `database` | `password` | Password MySQL |
+| `database` | `name` | Base de datos |
+| `database` | `max_open_conns` | Pool: conexiones abiertas máximas |
+| `database` | `max_idle_conns` | Pool: conexiones idle máximas |
+| `database` | `conn_max_lifetime` | Pool: lifetime máximo por conexión |
+| `log` | `level` | Nivel de log (debug/info/warn/error) |
 
 ---
 
@@ -276,7 +312,7 @@ type Product struct {
 | Cambio | Justificación |
 |--------|--------------|
 | `internal/errors/errors.go` agregado | El spec no define error types; necesarios para manejo limpio entre capas |
-| `internal/platform/logger/logger.go` agregado | Factory para Zap logger (spec asume Zap pero no define inicialización) |
+| `internal/infrastructure/logger/logger.go` agregado | Factory para Zap logger (spec asume Zap pero no define inicialización) |
 | `GET /health` endpoint agregado | Liveness check básico para verificar que el servidor está vivo |
 | Middleware request-id, logging, recovery | Esenciales para un MVP funcional en producción |
 | Validación en Controller (no UseCase) | La validación de schema HTTP pertenece al Controller según responsabilidades de capa |

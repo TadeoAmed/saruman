@@ -3,7 +3,17 @@
     "allow": [
       "Bash(go mod init:*)",
       "Bash(go mod tidy)",
-      "Bash(go build:*)"
+      "Bash(go build:*)",
+      "Bash(go version:*)",
+      "Bash(go install:*)",
+      "Bash(gopls:*)",
+      "Bash(where:*)",
+      "Bash(powershell -Command \"[Environment]::SetEnvironmentVariable\\(''Path'', [Environment]::GetEnvironmentVariable\\(''Path'', ''User''\\) + '';C:\\\\Program Files\\\\nodejs'', ''User''\\)\")",
+      "Bash(\"/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe\" -Command \"[Environment]::SetEnvironmentVariable\\(''Path'', [Environment]::GetEnvironmentVariable\\(''Path'', ''User''\\) + '';C:\\\\Program Files\\\\nodejs'', ''User''\\)\")",
+      "Bash(export PATH=\"$PATH:/c/Program Files/nodejs\")",
+      "Bash(node --version:*)",
+      "Bash(npx:*)",
+      "Bash(claude mcp list:*)"
     ]
   }
 }

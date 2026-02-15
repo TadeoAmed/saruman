@@ -8,9 +8,9 @@ import (
 	"syscall"
 	"time"
 
-	"saruman/internal/config"
-	"saruman/internal/platform/logger"
-	"saruman/internal/platform/mysql"
+	"saruman/internal/commons"
+	"saruman/internal/infrastructure/logger"
+	"saruman/internal/infrastructure/mysql"
 	"saruman/internal/product"
 	"saruman/internal/server"
 
@@ -18,7 +18,7 @@ import (
 )
 
 func main() {
-	cfg, err := config.Load()
+	cfg, err := commons.LoadConfig("internal/config/config.yaml")
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
 	}

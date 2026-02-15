@@ -1,4 +1,4 @@
-package product
+package repository
 
 import (
 	"context"
@@ -9,15 +9,15 @@ import (
 	"saruman/internal/domain"
 )
 
-type mysqlRepository struct {
+type MySQLRepository struct {
 	db *sql.DB
 }
 
-func NewMySQLRepository(db *sql.DB) Repository {
-	return &mysqlRepository{db: db}
+func NewMySQLRepository(db *sql.DB) *MySQLRepository {
+	return &MySQLRepository{db: db}
 }
 
-func (r *mysqlRepository) FindByIDsAndCompany(ctx context.Context, ids []int, companyID int) ([]domain.Product, error) {
+func (r *MySQLRepository) FindByIDsAndCompany(ctx context.Context, ids []int, companyID int) ([]domain.Product, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}

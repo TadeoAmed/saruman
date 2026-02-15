@@ -1,13 +1,19 @@
-package product
+package controller
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
+	"saruman/internal/dto"
 	apperrors "saruman/internal/errors"
 
 	"go.uber.org/zap"
 )
+
+type SearchUseCase interface {
+	SearchProducts(ctx context.Context, req dto.SearchProductsRequest) (*dto.SearchProductsResponse, error)
+}
 
 type Controller struct {
 	useCase SearchUseCase
@@ -22,7 +28,7 @@ func NewController(useCase SearchUseCase, logger *zap.Logger) *Controller {
 }
 
 func (c *Controller) HandleSearchProducts(w http.ResponseWriter, r *http.Request) {
-	var req SearchProductsRequest
+	var req dto.SearchProductsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		c.writeValidationError(w, "invalid JSON body", apperrors.ValidationDetail{
 			Field:   "body",
@@ -50,7 +56,7 @@ func (c *Controller) HandleSearchProducts(w http.ResponseWriter, r *http.Request
 	c.writeJSON(w, http.StatusOK, resp)
 }
 
-func (c *Controller) validateSearchRequest(req SearchProductsRequest) error {
+func (c *Controller) validateSearchRequest(req dto.SearchProductsRequest) error {
 	if req.CompanyID <= 0 {
 		msg := "companyId must be a positive integer"
 		if req.CompanyID == 0 {

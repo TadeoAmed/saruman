@@ -1,4 +1,4 @@
-package product
+package dto
 
 type SearchProductsRequest struct {
 	CompanyID  int   `json:"companyId"`

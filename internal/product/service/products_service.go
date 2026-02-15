@@ -1,4 +1,4 @@
-package product
+package service
 
 import (
 	"context"
@@ -6,15 +6,19 @@ import (
 	"saruman/internal/domain"
 )
 
-type productService struct {
+type Repository interface {
+	FindByIDsAndCompany(ctx context.Context, ids []int, companyID int) ([]domain.Product, error)
+}
+
+type ProductService struct {
 	repo Repository
 }
 
-func NewService(repo Repository) Service {
-	return &productService{repo: repo}
+func NewService(repo Repository) *ProductService {
+	return &ProductService{repo: repo}
 }
 
-func (s *productService) GetProductsByIDsAndCompany(ctx context.Context, ids []int, companyID int) ([]domain.Product, []int, error) {
+func (s *ProductService) GetProductsByIDsAndCompany(ctx context.Context, ids []int, companyID int) ([]domain.Product, []int, error) {
 	found, err := s.repo.FindByIDsAndCompany(ctx, ids, companyID)
 	if err != nil {
 		return nil, nil, err
