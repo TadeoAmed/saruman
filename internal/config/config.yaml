@@ -11,3 +11,8 @@ database:
   conn_max_lifetime: 5m
 log:
   level: info
+order:
+  # Transaction timeout for stock reservation (prevents hanging transactions)
+  reservation_tx_timeout: 5s
+  # Max retry attempts when MySQL deadlock is detected
+  max_retry_attempts: 3

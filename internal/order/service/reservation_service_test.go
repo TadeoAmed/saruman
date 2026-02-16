@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"saruman/internal/domain"
 	dtoerrors "saruman/internal/errors"
@@ -14,6 +15,24 @@ import (
 // Helper function to convert int to *int
 func intPtr(i int) *int {
 	return &i
+}
+
+// Helper to create ReservationService with test defaults
+func newTestReservationService(
+	txMgr TransactionManager,
+	productRepo ProductRepository,
+	orderItemRepo OrderItemRepository,
+	orderRepo OrderRepository,
+) *ReservationService {
+	return NewReservationService(
+		txMgr,
+		productRepo,
+		orderItemRepo,
+		orderRepo,
+		zap.NewNop(),
+		5*time.Second,      // Default test timeout
+		3,                  // Default max retry attempts
+	)
 }
 
 // Mock implementations
@@ -68,7 +87,6 @@ func (f *fakeTx) Rollback() error { return nil }
 // Tests
 
 func TestReserveItems_AllSuccess(t *testing.T) {
-	logger := zap.NewNop()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -107,14 +125,13 @@ func TestReserveItems_AllSuccess(t *testing.T) {
 		},
 	}
 
-	svc := NewReservationService(txMgr, productRepo, orderItemRepo, orderRepo, logger)
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
 	_ = svc
 
 	t.Logf("Test setup complete - all success test structure ready")
 }
 
 func TestReserveItems_AllFailed_NotFound(t *testing.T) {
-	logger := zap.NewNop()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -143,14 +160,13 @@ func TestReserveItems_AllFailed_NotFound(t *testing.T) {
 		},
 	}
 
-	svc := NewReservationService(txMgr, productRepo, orderItemRepo, orderRepo, logger)
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
 	_ = svc
 
 	t.Logf("Test setup complete - all failed test structure ready")
 }
 
 func TestReserveItems_Partial(t *testing.T) {
-	logger := zap.NewNop()
 
 	callCount := 0
 	productRepo := &mockProductRepository{
@@ -203,14 +219,13 @@ func TestReserveItems_Partial(t *testing.T) {
 		},
 	}
 
-	svc := NewReservationService(txMgr, productRepo, orderItemRepo, orderRepo, logger)
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
 	_ = svc
 
 	t.Logf("Test setup complete - partial reservation test structure ready")
 }
 
 func TestReserveItems_OutOfStock(t *testing.T) {
-	logger := zap.NewNop()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -246,14 +261,13 @@ func TestReserveItems_OutOfStock(t *testing.T) {
 		},
 	}
 
-	svc := NewReservationService(txMgr, productRepo, orderItemRepo, orderRepo, logger)
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
 	_ = svc
 
 	t.Logf("Test setup complete - out of stock test structure ready")
 }
 
 func TestReserveItems_InsufficientAvailable(t *testing.T) {
-	logger := zap.NewNop()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -289,14 +303,13 @@ func TestReserveItems_InsufficientAvailable(t *testing.T) {
 		},
 	}
 
-	svc := NewReservationService(txMgr, productRepo, orderItemRepo, orderRepo, logger)
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
 	_ = svc
 
 	t.Logf("Test setup complete - insufficient available test structure ready")
 }
 
 func TestReserveItems_ProductInactive(t *testing.T) {
-	logger := zap.NewNop()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -332,14 +345,13 @@ func TestReserveItems_ProductInactive(t *testing.T) {
 		},
 	}
 
-	svc := NewReservationService(txMgr, productRepo, orderItemRepo, orderRepo, logger)
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
 	_ = svc
 
 	t.Logf("Test setup complete - product inactive test structure ready")
 }
 
 func TestReserveItems_NoStockControl(t *testing.T) {
-	logger := zap.NewNop()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -378,14 +390,13 @@ func TestReserveItems_NoStockControl(t *testing.T) {
 		},
 	}
 
-	svc := NewReservationService(txMgr, productRepo, orderItemRepo, orderRepo, logger)
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
 	_ = svc
 
 	t.Logf("Test setup complete - no stock control test structure ready")
 }
 
 func TestReserveItems_ProductNotStockeable(t *testing.T) {
-	logger := zap.NewNop()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -424,14 +435,13 @@ func TestReserveItems_ProductNotStockeable(t *testing.T) {
 		},
 	}
 
-	svc := NewReservationService(txMgr, productRepo, orderItemRepo, orderRepo, logger)
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
 	_ = svc
 
 	t.Logf("Test setup complete - product not stockeable test structure ready")
 }
 
 func TestReserveItems_DBErrorOnIncrement(t *testing.T) {
-	logger := zap.NewNop()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -470,7 +480,7 @@ func TestReserveItems_DBErrorOnIncrement(t *testing.T) {
 		},
 	}
 
-	svc := NewReservationService(txMgr, productRepo, orderItemRepo, orderRepo, logger)
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
 	_ = svc
 
 	t.Logf("Test setup complete - DB error on increment test structure ready")
