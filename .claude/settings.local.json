@@ -13,7 +13,15 @@
       "Bash(export PATH=\"$PATH:/c/Program Files/nodejs\")",
       "Bash(node --version:*)",
       "Bash(npx:*)",
-      "Bash(claude mcp list:*)"
+      "Bash(claude mcp list:*)",
+      "Bash(node -e \"\nconst fs = require\\(''fs''\\);\nconst data = JSON.parse\\(fs.readFileSync\\(''C:/Users/Administrator/.claude.json'', ''utf8''\\)\\);\ndata.mcpServers[''ai-software-architect''] = { command: ''mcp'', args: [] };\nfs.writeFileSync\\(''C:/Users/Administrator/.claude.json'', JSON.stringify\\(data, null, 2\\) + ''\\\\n''\\);\nconsole.log\\(''Done''\\);\n\")",
+      "mcp__ai-software-architect__get_architecture_status",
+      "mcp__ai-software-architect__setup_architecture",
+      "mcp__ai-software-architect__configure_pragmatic_mode"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "ai-software-architect"
+  ]
 }

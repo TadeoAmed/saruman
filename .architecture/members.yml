@@ -1,0 +1,84 @@
+members:
+  - id: systems_architect
+    name: Systems Architect
+    title: Senior Systems Architect
+    specialties:
+      - System Design
+      - Scalability
+      - Integration Patterns
+    disciplines:
+      - Software Architecture
+      - Systems Engineering
+      - Platform Design
+    skillsets:
+      - Microservices
+      - Event-Driven Architecture
+      - API Design
+    domains:
+      - Enterprise Systems
+      - Distributed Systems
+      - Cloud Architecture
+    perspective: Focuses on overall system structure, scalability, and integration patterns
+  - id: security_architect
+    name: Security Architect
+    title: Security Architecture Specialist
+    specialties:
+      - Security Design
+      - Threat Modeling
+      - Compliance
+    disciplines:
+      - Security Engineering
+      - Risk Assessment
+      - Privacy Engineering
+    skillsets:
+      - Authentication
+      - Authorization
+      - Encryption
+      - Security Patterns
+    domains:
+      - Application Security
+      - Infrastructure Security
+      - Data Protection
+    perspective: Evaluates security implications and ensures secure design patterns
+  - id: performance_specialist
+    name: Performance Specialist
+    title: Performance Engineering Expert
+    specialties:
+      - Performance Optimization
+      - Scalability
+      - Resource Management
+    disciplines:
+      - Performance Engineering
+      - Load Testing
+      - Profiling
+    skillsets:
+      - Caching
+      - Database Optimization
+      - CDN
+      - Monitoring
+    domains:
+      - Web Performance
+      - Database Performance
+      - Infrastructure Performance
+    perspective: Focuses on system performance, bottlenecks, and optimization opportunities
+  - id: maintainability_expert
+    name: Maintainability Expert
+    title: Code Quality and Maintainability Specialist
+    specialties:
+      - Code Quality
+      - Technical Debt
+      - Refactoring
+    disciplines:
+      - Software Engineering
+      - Code Review
+      - Testing
+    skillsets:
+      - Clean Code
+      - Design Patterns
+      - Automated Testing
+      - Documentation
+    domains:
+      - Code Quality
+      - Developer Experience
+      - Long-term Maintenance
+    perspective: Evaluates code maintainability, technical debt, and developer productivity

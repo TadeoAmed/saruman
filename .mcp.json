@@ -1,4 +1,8 @@
 {
   "mcpServers": {
+    "ai-software-architect": {
+      "command": "mcp",
+      "args": []
+    }
   }
 }
