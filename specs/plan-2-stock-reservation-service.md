@@ -21,31 +21,57 @@ No se toca HTTP ni DTOs — ese es scope de spec-3.
 
 **Qué hacer:**
 - Definir tipo `ReservationStatus string` con constantes:
-  - `ReservationAllSuccess ReservationStatus = "ALL_SUCCESS"`
-  - `ReservationPartial    ReservationStatus = "PARTIAL"`
-  - `ReservationAllFailed  ReservationStatus = "ALL_FAILED"`
+  ```go
+  // ReservationStatus indicates the overall result of a reservation operation.
+  // ALL_SUCCESS: all items reserved, order committed. PARTIAL: some items reserved, some failed, order committed.
+  // ALL_FAILED: no items reserved, transaction rolled back.
+  type ReservationStatus string
+  const (
+      ReservationAllSuccess ReservationStatus = "ALL_SUCCESS"
+      ReservationPartial    ReservationStatus = "PARTIAL"
+      ReservationAllFailed  ReservationStatus = "ALL_FAILED"
+  )
+  ```
+
 - Definir tipo `FailureReason string` con constantes:
-  - `ReasonNotFound              FailureReason = "NOT_FOUND"`
-  - `ReasonOutOfStock            FailureReason = "OUT_OF_STOCK"`
-  - `ReasonInsufficientAvailable FailureReason = "INSUFFICIENT_AVAILABLE"`
-  - `ReasonProductInactive       FailureReason = "PRODUCT_INACTIVE"`
+  ```go
+  // FailureReason describes why a single item could not be reserved.
+  type FailureReason string
+  const (
+      // NOT_FOUND: product not found for the given company ID.
+      ReasonNotFound FailureReason = "NOT_FOUND"
+      // OUT_OF_STOCK: product has zero available stock (reserved + sold == total).
+      ReasonOutOfStock FailureReason = "OUT_OF_STOCK"
+      // INSUFFICIENT_AVAILABLE: available stock < requested quantity.
+      ReasonInsufficientAvailable FailureReason = "INSUFFICIENT_AVAILABLE"
+      // PRODUCT_INACTIVE: product.isActive == false, cannot be reserved.
+      ReasonProductInactive FailureReason = "PRODUCT_INACTIVE"
+  )
+  ```
+
 - Definir struct `ItemSuccess`:
   ```go
+  // ItemSuccess records a successfully reserved item (product ID and quantity).
   type ItemSuccess struct {
       ProductID int
       Quantity  int
   }
   ```
+
 - Definir struct `ItemFailure`:
   ```go
+  // ItemFailure records a failed reservation attempt with the reason (stock unavailable, product inactive, etc.).
   type ItemFailure struct {
       ProductID int
       Quantity  int
       Reason    FailureReason
   }
   ```
+
 - Definir struct `ReservationResult`:
   ```go
+  // ReservationResult is the final output of a reserve-and-add operation.
+  // Contains the overall status, order ID, total price of reserved items, and per-item successes and failures.
   type ReservationResult struct {
       Status     ReservationStatus
       OrderID    uint
@@ -54,8 +80,11 @@ No se toca HTTP ni DTOs — ese es scope de spec-3.
       Failures   []ItemFailure
   }
   ```
+
 - Definir struct `ReservationItem` (input del service y use case):
   ```go
+  // ReservationItem is the input data for each product to be reserved.
+  // Includes product ID, quantity requested, and unit price (for total price calculation).
   type ReservationItem struct {
       ProductID int
       Quantity  int
@@ -72,15 +101,35 @@ No se toca HTTP ni DTOs — ese es scope de spec-3.
 **Archivo:** `internal/errors/errors.go` (EDITAR)
 
 **Qué hacer:**
-- Agregar tipo `ConflictError` con campo `Message string`:
+- Agregar tipo `ConflictError` (HTTP 409):
   ```go
+  // ConflictError indicates the order cannot be processed due to invalid state (e.g., not PENDING).
+  // Maps to HTTP 409 Conflict in the controller.
   type ConflictError struct{ Message string }
   func (e *ConflictError) Error() string { return e.Message }
   func NewConflictError(message string) *ConflictError { return &ConflictError{Message: message} }
   func IsConflictError(err error) (*ConflictError, bool) { ... }
   ```
-- Agregar tipo `ForbiddenError` con campo `Message string` (mismo patrón).
-- Agregar tipo `DeadlockError` con campo `Message string` (mismo patrón).
+
+- Agregar tipo `ForbiddenError` (HTTP 403):
+  ```go
+  // ForbiddenError indicates the requesting company is not the owner of the order.
+  // Maps to HTTP 403 Forbidden in the controller.
+  type ForbiddenError struct{ Message string }
+  func (e *ForbiddenError) Error() string { return e.Message }
+  func NewForbiddenError(message string) *ForbiddenError { return &ForbiddenError{Message: message} }
+  func IsForbiddenError(err error) (*ForbiddenError, bool) { ... }
+  ```
+
+- Agregar tipo `DeadlockError` (internal retry flag):
+  ```go
+  // DeadlockError wraps MySQL deadlock errors (codes 1213, 1205) for retry logic.
+  // Returned when max retry attempts exceeded. Not directly mapped to HTTP response in this layer.
+  type DeadlockError struct{ Message string }
+  func (e *DeadlockError) Error() string { return e.Message }
+  func NewDeadlockError(message string) *DeadlockError { return &DeadlockError{Message: message} }
+  func IsDeadlockError(err error) (*DeadlockError, bool) { ... }
+  ```
 
 **Justificación:** El use case necesita retornar errores semánticos que el controller (spec-3) mapeará a 409, 403 y 503/500 respectivamente. Siguen el patrón exacto de `ValidationError` / `NotFoundError` (plan-1).
 
@@ -94,20 +143,35 @@ No se toca HTTP ni DTOs — ese es scope de spec-3.
 
 ```go
 type TransactionManager interface {
+    // BeginTx starts a new database transaction with specified isolation level.
+    // Used by the service to control atomicity of stock reservation operations.
     BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
 }
 
 type ProductRepository interface {
+    // FindByIDForUpdate retrieves a product by ID with an exclusive row lock (SELECT ... FOR UPDATE).
+    // The lock prevents concurrent transactions from modifying the same product's reserved stock,
+    // avoiding race conditions during concurrent reservations. Filters by companyId to ensure multi-tenancy.
     FindByIDForUpdate(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error)
+
+    // IncrementReservedStock atomically increases the product's reserved stock by the given quantity.
+    // Called after validating available stock. Must execute within the same transaction as FindByIDForUpdate.
     IncrementReservedStock(ctx context.Context, tx *sql.Tx, productID int, quantity int) error
 }
 
 type OrderItemRepository interface {
+    // Insert creates a new order item (product + quantity + price) linked to an order.
+    // Executes within the reservation transaction. Commits only if all items are processed successfully.
     Insert(ctx context.Context, tx *sql.Tx, item domain.OrderItem) (uint, error)
 }
 
 type OrderRepository interface {
+    // UpdateStatus changes the order status from PENDING to CREATED.
+    // Only called after at least one item is successfully reserved (atomicity guarantee).
     UpdateStatus(ctx context.Context, tx *sql.Tx, id uint, status string) error
+
+    // UpdateTotalPrice sets the order's total price to the sum of reserved item prices.
+    // Committed together with status update and order items in the same transaction.
     UpdateTotalPrice(ctx context.Context, tx *sql.Tx, id uint, totalPrice float64) error
 }
 ```
@@ -142,6 +206,10 @@ func NewReservationService(
 
 Firma:
 ```go
+// ReserveItems is the core business logic that reserves stock for multiple products in a single atomic transaction.
+// Initiates a REPEATABLE READ transaction, processes each item's availability and reservation,
+// updates order status and total price on partial/full success, and returns detailed results per item.
+// Handles transaction commit/rollback: commits on >=1 success, rolls back on all failures or DB errors.
 func (s *ReservationService) ReserveItems(
     ctx context.Context,
     orderID uint,
@@ -182,6 +250,10 @@ Lógica (el service maneja la transacción internamente):
 
 Firma:
 ```go
+// reserveSingleItem processes a single product reservation within the active transaction.
+// Validates product existence, status, and stock availability (conditional on company config).
+// On success: increments reserved_stock and inserts order item. On failure: returns ItemFailure with reason.
+// Propagates unexpected DB errors; business-logic failures (stock unavailable, product inactive) are ItemFailure.
 func (s *ReservationService) reserveSingleItem(
     ctx context.Context,
     tx *sql.Tx,
@@ -215,6 +287,9 @@ Lógica (en orden):
 
 ```go
 type StockReservationService interface {
+    // ReserveItems orchestrates the atomic reservation of multiple products within a single transaction.
+    // Returns a ReservationResult with successes and failures per item. Handles transaction lifecycle internally.
+    // The use case retries this method on deadlock (MySQL errors 1213, 1205) up to 3 times.
     ReserveItems(
         ctx context.Context,
         orderID uint,
@@ -225,10 +300,14 @@ type StockReservationService interface {
 }
 
 type OrderRepository interface {
+    // FindByID retrieves an order by ID for pre-validation (check status and company ownership).
+    // Used outside of transaction to verify order exists and is in PENDING status before reservation.
     FindByID(ctx context.Context, id uint) (*domain.Order, error)
 }
 
 type CompanyConfigRepository interface {
+    // FindByCompanyID retrieves company-wide settings, particularly the hasStock flag.
+    // Determines whether the use case should enforce stock validation during reservation.
     FindByCompanyID(ctx context.Context, companyID int) (*domain.CompanyConfig, error)
 }
 ```
@@ -259,6 +338,9 @@ func NewReserveAndAddUseCase(
 
 Firma:
 ```go
+// Execute orchestrates the complete reserve-and-add workflow: validates order state and company,
+// sorts items by productId (anti-deadlock), and calls the reservation service with automatic retry on deadlock.
+// No transaction logic here; all transactional concerns are delegated to the service.
 func (uc *ReserveAndAddUseCase) Execute(
     ctx context.Context,
     orderID uint,
@@ -291,6 +373,9 @@ Lógica en orden:
 ### 4.4 Método privado `executeWithRetry`
 
 ```go
+// executeWithRetry calls the reservation service up to 3 times, retrying only on MySQL deadlock errors (1213, 1205).
+// Implements exponential backoff [0ms, 100ms, 200ms] with ±20% jitter to distribute retry attempts.
+// Non-deadlock errors fail immediately. Returns the final result or DeadlockError if all retries exhausted.
 func (uc *ReserveAndAddUseCase) executeWithRetry(
     ctx context.Context,
     orderID uint,
