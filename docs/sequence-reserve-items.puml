@@ -1,0 +1,91 @@
+@startuml Sequence: ReserveItems Flow
+
+actor Client
+participant Controller
+participant UseCase
+participant Service
+participant ProductRepo
+participant OrderItemRepo
+participant OrderRepo
+participant Database
+
+Client ->> Controller: POST /orders/{id}/reserve
+Controller ->> UseCase: ReserveItems(orderID, companyID, items)
+
+Note over UseCase: 1. Pre-validations (no transaction)
+UseCase ->> OrderRepo: FindByID(orderID)
+OrderRepo ->> Database: SELECT * FROM Order WHERE id=?
+Database -->> OrderRepo: order
+OrderRepo -->> UseCase: order
+
+Note over UseCase: Check order.Status == PENDING
+alt Order not pending
+    UseCase -->> Controller: ConflictError
+    Controller -->> Client: 409 Conflict
+end
+
+Note over UseCase: 2. Fetch company config
+UseCase ->> OrderRepo: FindByCompanyID(companyID)
+OrderRepo ->> Database: SELECT * FROM CompanyConfig WHERE companyId=?
+Database -->> OrderRepo: config
+OrderRepo -->> UseCase: config
+
+Note over UseCase: 3. Sort items by ProductID ASC
+UseCase ->> UseCase: sort.Slice(items, func...)
+
+Note over UseCase: 4. Call service with retry
+UseCase ->> Service: ReserveItems(orderID, companyID, items, hasStockControl)
+
+Note over Service: TRANSACTION BEGIN (Repeatable Read)
+Service ->> Database: BEGIN TRANSACTION
+
+loop For each item (sorted)
+    Service ->> ProductRepo: FindByIDForUpdate(productID) [LOCK]
+    ProductRepo ->> Database: SELECT * FROM Product WHERE id=? FOR UPDATE
+    Database -->> ProductRepo: product (with lock)
+    ProductRepo -->> Service: product
+
+    alt Product not found
+        Service ->> Service: return ItemFailure(NOT_FOUND)
+    end
+
+    alt Product inactive
+        Service ->> Service: return ItemFailure(PRODUCT_INACTIVE)
+    end
+
+    alt hasStockControl && available < quantity
+        Service ->> Service: return ItemFailure(OUT_OF_STOCK/INSUFFICIENT)
+    else Stock OK or no control
+        Service ->> ProductRepo: IncrementReservedStock(productID, qty)
+        ProductRepo ->> Database: UPDATE Product SET reserved_stock = reserved_stock + ?
+        Database -->> ProductRepo: OK
+        ProductRepo -->> Service: OK
+
+        Service ->> OrderItemRepo: Insert(orderID, productID, qty, price)
+        OrderItemRepo ->> Database: INSERT INTO OrderItem (...)
+        Database -->> OrderItemRepo: itemID
+        OrderItemRepo -->> Service: itemID
+    end
+end
+
+Note over Service: Check results
+alt All succeeded
+    Service ->> OrderRepo: UpdateStatus(orderID, CREATED)
+    OrderRepo ->> Database: UPDATE Order SET status=?
+    Service ->> OrderRepo: UpdateTotalPrice(orderID, totalPrice)
+    OrderRepo ->> Database: UPDATE Order SET totalPrice=?
+    Service ->> Database: COMMIT
+    Service -->> UseCase: ReservationResult(ALL_SUCCESS)
+else All failed
+    Service ->> Database: ROLLBACK
+    Service -->> UseCase: ReservationResult(ALL_FAILED)
+else Partial
+    Service ->> OrderRepo: UpdateStatus, UpdateTotalPrice
+    Service ->> Database: COMMIT
+    Service -->> UseCase: ReservationResult(PARTIAL)
+end
+
+UseCase -->> Controller: ReservationResult
+Controller -->> Client: 200 OK + result JSON
+
+@enduml

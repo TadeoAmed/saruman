@@ -18,7 +18,8 @@
       "mcp__ai-software-architect__get_architecture_status",
       "mcp__ai-software-architect__setup_architecture",
       "mcp__ai-software-architect__configure_pragmatic_mode",
-      "Bash(go test:*)"
+      "Bash(go test:*)",
+      "Bash(go vet:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -1,0 +1,61 @@
+@startuml Hexagonal Architecture - Saruman
+
+!define ACCENT_COLOR #FF6B6B
+!define LAYER_COLOR #4ECDC4
+!define DOMAIN_COLOR #45B7D1
+!define INFRA_COLOR #96CEB4
+
+title Saruman: Hexagonal Architecture (4-Layer)
+
+package "HTTP Layer" {
+    component [Controller] as CTRL
+    note right of CTRL
+        HTTP handlers
+        Request/Response parsing
+        Status codes
+    end note
+}
+
+package "Application Layer" {
+    component [UseCase] as UC
+    note right of UC
+        Orchestration
+        DTO mapping
+        Pre-validations
+        Retry logic
+    end note
+}
+
+package "Domain Layer" {
+    component [Service] as SVC
+    note right of SVC
+        Pure business logic
+        Domain calculations
+        Transactions
+    end note
+}
+
+package "Infrastructure Layer" {
+    component [Repository] as REPO
+    component [Database] as DB
+    note right of REPO
+        SQL queries
+        Entity mapping
+        Data access
+    end note
+}
+
+CTRL -->|Call| UC: ReserveItems()
+UC -->|Orchestrate| SVC: ReserveItems()
+SVC -->|Query/Update| REPO: FindByID(), Insert()
+REPO -->|SQL| DB: MySQL
+
+note bottom
+    Dependency Flow (NEVER INVERT):
+    Controller → UseCase → Service → Repository → MySQL
+
+    Each layer depends on INTERFACES, never implementations
+    Interfaces defined in consumer package
+end note
+
+@enduml
