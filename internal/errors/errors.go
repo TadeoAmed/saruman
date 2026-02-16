@@ -52,3 +52,24 @@ func NewInternalError(message string, cause error) *InternalError {
 		Cause:   cause,
 	}
 }
+
+type NotFoundError struct {
+	Message string
+}
+
+func (e *NotFoundError) Error() string {
+	return e.Message
+}
+
+func NewNotFoundError(message string) *NotFoundError {
+	return &NotFoundError{
+		Message: message,
+	}
+}
+
+func IsNotFoundError(err error) (*NotFoundError, bool) {
+	if nfe, ok := err.(*NotFoundError); ok {
+		return nfe, true
+	}
+	return nil, false
+}

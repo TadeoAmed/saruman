@@ -17,7 +17,8 @@
       "Bash(node -e \"\nconst fs = require\\(''fs''\\);\nconst data = JSON.parse\\(fs.readFileSync\\(''C:/Users/Administrator/.claude.json'', ''utf8''\\)\\);\ndata.mcpServers[''ai-software-architect''] = { command: ''mcp'', args: [] };\nfs.writeFileSync\\(''C:/Users/Administrator/.claude.json'', JSON.stringify\\(data, null, 2\\) + ''\\\\n''\\);\nconsole.log\\(''Done''\\);\n\")",
       "mcp__ai-software-architect__get_architecture_status",
       "mcp__ai-software-architect__setup_architecture",
-      "mcp__ai-software-architect__configure_pragmatic_mode"
+      "mcp__ai-software-architect__configure_pragmatic_mode",
+      "Bash(go test:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
