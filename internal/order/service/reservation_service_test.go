@@ -3,12 +3,13 @@ package service
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"testing"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"saruman/internal/domain"
 	dtoerrors "saruman/internal/errors"
+	"saruman/internal/dto"
 	"go.uber.org/zap"
 )
 
@@ -45,7 +46,7 @@ func (m *mockTransactionManager) BeginTx(ctx context.Context, opts *sql.TxOption
 }
 
 type mockProductRepository struct {
-	FindByIDForUpdateFunc    func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error)
+	FindByIDForUpdateFunc      func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error)
 	IncrementReservedStockFunc func(ctx context.Context, tx *sql.Tx, productID int, quantity int) error
 }
 
@@ -78,60 +79,10 @@ func (m *mockOrderRepository) UpdateTotalPrice(ctx context.Context, tx *sql.Tx, 
 	return m.UpdateTotalPriceFunc(ctx, tx, id, totalPrice)
 }
 
-// Fake transaction for testing
-type fakeTx struct{}
+// Tests - These test the validation logic by returning early (product lookup fails before transaction operations)
 
-func (f *fakeTx) Commit() error   { return nil }
-func (f *fakeTx) Rollback() error { return nil }
-
-// Tests
-
-func TestReserveItems_AllSuccess(t *testing.T) {
-
-	productRepo := &mockProductRepository{
-		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
-			return &domain.Product{
-				ID:            productID,
-				IsActive:      true,
-				HasStock:      true,
-				Stockeable:    true,
-				ReservedStock: intPtr(0),
-				Stock:         intPtr(100),
-			}, nil
-		},
-		IncrementReservedStockFunc: func(ctx context.Context, tx *sql.Tx, productID int, quantity int) error {
-			return nil
-		},
-	}
-
-	orderItemRepo := &mockOrderItemRepository{
-		InsertFunc: func(ctx context.Context, tx *sql.Tx, item domain.OrderItem) (uint, error) {
-			return 1, nil
-		},
-	}
-
-	orderRepo := &mockOrderRepository{
-		UpdateStatusFunc: func(ctx context.Context, tx *sql.Tx, id uint, status string) error {
-			return nil
-		},
-		UpdateTotalPriceFunc: func(ctx context.Context, tx *sql.Tx, id uint, totalPrice float64) error {
-			return nil
-		},
-	}
-
-	txMgr := &mockTransactionManager{
-		BeginTxFunc: func(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
-			return (*sql.Tx)(nil), nil
-		},
-	}
-
-	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
-	_ = svc
-
-	t.Logf("Test setup complete - all success test structure ready")
-}
-
-func TestReserveItems_AllFailed_NotFound(t *testing.T) {
+func TestReserveItems_ProductNotFound(t *testing.T) {
+	ctx := context.Background()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -139,18 +90,22 @@ func TestReserveItems_AllFailed_NotFound(t *testing.T) {
 		},
 	}
 
+	// These should not be called
 	orderItemRepo := &mockOrderItemRepository{
 		InsertFunc: func(ctx context.Context, tx *sql.Tx, item domain.OrderItem) (uint, error) {
-			return 0, errors.New("should not be called")
+			t.Fatal("Insert should not be called when product not found")
+			return 0, nil
 		},
 	}
 
 	orderRepo := &mockOrderRepository{
 		UpdateStatusFunc: func(ctx context.Context, tx *sql.Tx, id uint, status string) error {
-			return errors.New("should not be called")
+			t.Fatal("UpdateStatus should not be called")
+			return nil
 		},
 		UpdateTotalPriceFunc: func(ctx context.Context, tx *sql.Tx, id uint, totalPrice float64) error {
-			return errors.New("should not be called")
+			t.Fatal("UpdateTotalPrice should not be called")
+			return nil
 		},
 	}
 
@@ -161,29 +116,275 @@ func TestReserveItems_AllFailed_NotFound(t *testing.T) {
 	}
 
 	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
-	_ = svc
+	items := []dto.ReservationItem{{ProductID: 1, Quantity: 10, Price: 100.0}}
 
-	t.Logf("Test setup complete - all failed test structure ready")
+	result, err := svc.ReserveItems(ctx, 1, 1, items)
+
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+
+	if result.Status != dto.ReservationAllFailed {
+		t.Errorf("expected ALL_FAILED, got %s", result.Status)
+	}
+
+	if len(result.Failures) != 1 || result.Failures[0].Reason != dto.ReasonNotFound {
+		t.Errorf("expected ReasonNotFound, got %v", result.Failures)
+	}
 }
 
-func TestReserveItems_Partial(t *testing.T) {
+func TestReserveItems_ProductInactive(t *testing.T) {
+	ctx := context.Background()
 
-	callCount := 0
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
-			callCount++
-			if callCount == 1 {
-				// First product: OK
-				return &domain.Product{
-					ID:            productID,
-					IsActive:      true,
-					HasStock:      true,
-					Stockeable:    true,
-					ReservedStock: intPtr(0),
-					Stock:         intPtr(100),
-				}, nil
-			}
-			// Second product: out of stock
+			return &domain.Product{
+				ID:         productID,
+				IsActive:   false,
+				HasStock:   true,
+				Stockeable: true,
+			}, nil
+		},
+	}
+
+	orderItemRepo := &mockOrderItemRepository{
+		InsertFunc: func(ctx context.Context, tx *sql.Tx, item domain.OrderItem) (uint, error) {
+			t.Fatal("Insert should not be called when product inactive")
+			return 0, nil
+		},
+	}
+
+	orderRepo := &mockOrderRepository{
+		UpdateStatusFunc: func(ctx context.Context, tx *sql.Tx, id uint, status string) error {
+			t.Fatal("UpdateStatus should not be called")
+			return nil
+		},
+		UpdateTotalPriceFunc: func(ctx context.Context, tx *sql.Tx, id uint, totalPrice float64) error {
+			t.Fatal("UpdateTotalPrice should not be called")
+			return nil
+		},
+	}
+
+	txMgr := &mockTransactionManager{
+		BeginTxFunc: func(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+			return (*sql.Tx)(nil), nil
+		},
+	}
+
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
+	items := []dto.ReservationItem{{ProductID: 1, Quantity: 10, Price: 100.0}}
+
+	result, err := svc.ReserveItems(ctx, 1, 1, items)
+
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+
+	if result.Status != dto.ReservationAllFailed {
+		t.Errorf("expected ALL_FAILED, got %s", result.Status)
+	}
+
+	if len(result.Failures) != 1 || result.Failures[0].Reason != dto.ReasonProductInactive {
+		t.Errorf("expected ReasonProductInactive, got %v", result.Failures)
+	}
+}
+
+func TestReserveItems_ProductNotStockeable(t *testing.T) {
+	// NEW FIX: validation is now unconditional - Stockeable=false always fails
+	ctx := context.Background()
+
+	productRepo := &mockProductRepository{
+		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
+			return &domain.Product{
+				ID:            productID,
+				IsActive:      true,
+				HasStock:      true,
+				Stockeable:    false, // Not stockeable
+				ReservedStock: intPtr(50),
+				Stock:         intPtr(100),
+			}, nil
+		},
+		IncrementReservedStockFunc: func(ctx context.Context, tx *sql.Tx, productID int, quantity int) error {
+			t.Fatal("IncrementReservedStock should not be called when Stockeable=false")
+			return nil
+		},
+	}
+
+	orderItemRepo := &mockOrderItemRepository{
+		InsertFunc: func(ctx context.Context, tx *sql.Tx, item domain.OrderItem) (uint, error) {
+			t.Fatal("Insert should not be called when Stockeable=false")
+			return 0, nil
+		},
+	}
+
+	orderRepo := &mockOrderRepository{
+		UpdateStatusFunc: func(ctx context.Context, tx *sql.Tx, id uint, status string) error {
+			t.Fatal("UpdateStatus should not be called")
+			return nil
+		},
+		UpdateTotalPriceFunc: func(ctx context.Context, tx *sql.Tx, id uint, totalPrice float64) error {
+			t.Fatal("UpdateTotalPrice should not be called")
+			return nil
+		},
+	}
+
+	txMgr := &mockTransactionManager{
+		BeginTxFunc: func(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+			return (*sql.Tx)(nil), nil
+		},
+	}
+
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
+	items := []dto.ReservationItem{{ProductID: 1, Quantity: 10, Price: 100.0}}
+
+	result, err := svc.ReserveItems(ctx, 1, 1, items)
+
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+
+	if result.Status != dto.ReservationAllFailed {
+		t.Errorf("expected ALL_FAILED, got %s", result.Status)
+	}
+
+	if len(result.Failures) != 1 || result.Failures[0].Reason != dto.ReasonProductNotStockeable {
+		t.Errorf("expected ReasonProductNotStockeable, got %v", result.Failures)
+	}
+}
+
+func TestReserveItems_ProductHasStockFalse(t *testing.T) {
+	// NEW FIX: validation is now unconditional - HasStock=false always fails
+	ctx := context.Background()
+
+	productRepo := &mockProductRepository{
+		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
+			return &domain.Product{
+				ID:            productID,
+				IsActive:      true,
+				HasStock:      false, // Stock control disabled
+				Stockeable:    true,
+				ReservedStock: intPtr(50),
+				Stock:         intPtr(100),
+			}, nil
+		},
+		IncrementReservedStockFunc: func(ctx context.Context, tx *sql.Tx, productID int, quantity int) error {
+			t.Fatal("IncrementReservedStock should not be called when HasStock=false")
+			return nil
+		},
+	}
+
+	orderItemRepo := &mockOrderItemRepository{
+		InsertFunc: func(ctx context.Context, tx *sql.Tx, item domain.OrderItem) (uint, error) {
+			t.Fatal("Insert should not be called when HasStock=false")
+			return 0, nil
+		},
+	}
+
+	orderRepo := &mockOrderRepository{
+		UpdateStatusFunc: func(ctx context.Context, tx *sql.Tx, id uint, status string) error {
+			t.Fatal("UpdateStatus should not be called")
+			return nil
+		},
+		UpdateTotalPriceFunc: func(ctx context.Context, tx *sql.Tx, id uint, totalPrice float64) error {
+			t.Fatal("UpdateTotalPrice should not be called")
+			return nil
+		},
+	}
+
+	txMgr := &mockTransactionManager{
+		BeginTxFunc: func(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+			return (*sql.Tx)(nil), nil
+		},
+	}
+
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
+	items := []dto.ReservationItem{{ProductID: 1, Quantity: 10, Price: 100.0}}
+
+	result, err := svc.ReserveItems(ctx, 1, 1, items)
+
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+
+	if result.Status != dto.ReservationAllFailed {
+		t.Errorf("expected ALL_FAILED, got %s", result.Status)
+	}
+
+	if len(result.Failures) != 1 || result.Failures[0].Reason != dto.ReasonProductNotStockeable {
+		t.Errorf("expected ReasonProductNotStockeable, got %v", result.Failures)
+	}
+}
+
+func TestReserveItems_FullyReserved(t *testing.T) {
+	// CRITICAL BUG FIX: Reproduces the exact bug - stock=2, reserved=2, available=0
+	// With the fix, validation is unconditional: should return OUT_OF_STOCK, Insert NOT called
+	ctx := context.Background()
+
+	productRepo := &mockProductRepository{
+		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
+			return &domain.Product{
+				ID:            productID,
+				IsActive:      true,
+				HasStock:      true,
+				Stockeable:    true,
+				ReservedStock: intPtr(2), // fully reserved
+				Stock:         intPtr(2),
+			}, nil
+		},
+		IncrementReservedStockFunc: func(ctx context.Context, tx *sql.Tx, productID int, quantity int) error {
+			t.Fatal("IncrementReservedStock should not be called when available=0")
+			return nil
+		},
+	}
+
+	orderItemRepo := &mockOrderItemRepository{
+		InsertFunc: func(ctx context.Context, tx *sql.Tx, item domain.OrderItem) (uint, error) {
+			t.Fatal("Insert should NOT be called - stock validation should have failed")
+			return 0, nil
+		},
+	}
+
+	orderRepo := &mockOrderRepository{
+		UpdateStatusFunc: func(ctx context.Context, tx *sql.Tx, id uint, status string) error {
+			t.Fatal("UpdateStatus should not be called")
+			return nil
+		},
+		UpdateTotalPriceFunc: func(ctx context.Context, tx *sql.Tx, id uint, totalPrice float64) error {
+			t.Fatal("UpdateTotalPrice should not be called")
+			return nil
+		},
+	}
+
+	txMgr := &mockTransactionManager{
+		BeginTxFunc: func(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+			return (*sql.Tx)(nil), nil
+		},
+	}
+
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
+	// Using productID 176, companyID 2 from the bug report
+	items := []dto.ReservationItem{{ProductID: 176, Quantity: 1, Price: 100.0}}
+
+	result, err := svc.ReserveItems(ctx, 1, 2, items)
+
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+
+	if result.Status != dto.ReservationAllFailed {
+		t.Errorf("expected ALL_FAILED, got %s", result.Status)
+	}
+
+	if len(result.Failures) != 1 || result.Failures[0].Reason != dto.ReasonOutOfStock {
+		t.Errorf("expected ReasonOutOfStock, got %v", result.Failures)
+	}
+}
+
+func TestReserveItems_OutOfStock(t *testing.T) {
+	ctx := context.Background()
+
+	productRepo := &mockProductRepository{
+		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
 			return &domain.Product{
 				ID:            productID,
 				IsActive:      true,
@@ -194,21 +395,25 @@ func TestReserveItems_Partial(t *testing.T) {
 			}, nil
 		},
 		IncrementReservedStockFunc: func(ctx context.Context, tx *sql.Tx, productID int, quantity int) error {
+			t.Fatal("IncrementReservedStock should not be called when available=0")
 			return nil
 		},
 	}
 
 	orderItemRepo := &mockOrderItemRepository{
 		InsertFunc: func(ctx context.Context, tx *sql.Tx, item domain.OrderItem) (uint, error) {
-			return 1, nil
+			t.Fatal("Insert should not be called when out of stock")
+			return 0, nil
 		},
 	}
 
 	orderRepo := &mockOrderRepository{
 		UpdateStatusFunc: func(ctx context.Context, tx *sql.Tx, id uint, status string) error {
+			t.Fatal("UpdateStatus should not be called")
 			return nil
 		},
 		UpdateTotalPriceFunc: func(ctx context.Context, tx *sql.Tx, id uint, totalPrice float64) error {
+			t.Fatal("UpdateTotalPrice should not be called")
 			return nil
 		},
 	}
@@ -220,54 +425,25 @@ func TestReserveItems_Partial(t *testing.T) {
 	}
 
 	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
-	_ = svc
+	items := []dto.ReservationItem{{ProductID: 1, Quantity: 10, Price: 100.0}}
 
-	t.Logf("Test setup complete - partial reservation test structure ready")
-}
+	result, err := svc.ReserveItems(ctx, 1, 1, items)
 
-func TestReserveItems_OutOfStock(t *testing.T) {
-
-	productRepo := &mockProductRepository{
-		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
-			return &domain.Product{
-				ID:            productID,
-				IsActive:      true,
-				HasStock:      true,
-				Stockeable:    true,
-				ReservedStock: intPtr(100),
-				Stock:         intPtr(0),
-			}, nil
-		},
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
 	}
 
-	orderItemRepo := &mockOrderItemRepository{
-		InsertFunc: func(ctx context.Context, tx *sql.Tx, item domain.OrderItem) (uint, error) {
-			return 0, errors.New("should not be called")
-		},
+	if result.Status != dto.ReservationAllFailed {
+		t.Errorf("expected ALL_FAILED, got %s", result.Status)
 	}
 
-	orderRepo := &mockOrderRepository{
-		UpdateStatusFunc: func(ctx context.Context, tx *sql.Tx, id uint, status string) error {
-			return errors.New("should not be called")
-		},
-		UpdateTotalPriceFunc: func(ctx context.Context, tx *sql.Tx, id uint, totalPrice float64) error {
-			return errors.New("should not be called")
-		},
+	if len(result.Failures) != 1 || result.Failures[0].Reason != dto.ReasonOutOfStock {
+		t.Errorf("expected ReasonOutOfStock, got %v", result.Failures)
 	}
-
-	txMgr := &mockTransactionManager{
-		BeginTxFunc: func(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
-			return (*sql.Tx)(nil), nil
-		},
-	}
-
-	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
-	_ = svc
-
-	t.Logf("Test setup complete - out of stock test structure ready")
 }
 
 func TestReserveItems_InsufficientAvailable(t *testing.T) {
+	ctx := context.Background()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -280,106 +456,26 @@ func TestReserveItems_InsufficientAvailable(t *testing.T) {
 				Stock:         intPtr(100),
 			}, nil
 		},
-	}
-
-	orderItemRepo := &mockOrderItemRepository{
-		InsertFunc: func(ctx context.Context, tx *sql.Tx, item domain.OrderItem) (uint, error) {
-			return 0, errors.New("should not be called")
-		},
-	}
-
-	orderRepo := &mockOrderRepository{
-		UpdateStatusFunc: func(ctx context.Context, tx *sql.Tx, id uint, status string) error {
-			return errors.New("should not be called")
-		},
-		UpdateTotalPriceFunc: func(ctx context.Context, tx *sql.Tx, id uint, totalPrice float64) error {
-			return errors.New("should not be called")
-		},
-	}
-
-	txMgr := &mockTransactionManager{
-		BeginTxFunc: func(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
-			return (*sql.Tx)(nil), nil
-		},
-	}
-
-	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
-	_ = svc
-
-	t.Logf("Test setup complete - insufficient available test structure ready")
-}
-
-func TestReserveItems_ProductInactive(t *testing.T) {
-
-	productRepo := &mockProductRepository{
-		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
-			return &domain.Product{
-				ID:            productID,
-				IsActive:      false,
-				HasStock:      true,
-				Stockeable:    true,
-				ReservedStock: intPtr(0),
-				Stock:         intPtr(100),
-			}, nil
-		},
-	}
-
-	orderItemRepo := &mockOrderItemRepository{
-		InsertFunc: func(ctx context.Context, tx *sql.Tx, item domain.OrderItem) (uint, error) {
-			return 0, errors.New("should not be called")
-		},
-	}
-
-	orderRepo := &mockOrderRepository{
-		UpdateStatusFunc: func(ctx context.Context, tx *sql.Tx, id uint, status string) error {
-			return errors.New("should not be called")
-		},
-		UpdateTotalPriceFunc: func(ctx context.Context, tx *sql.Tx, id uint, totalPrice float64) error {
-			return errors.New("should not be called")
-		},
-	}
-
-	txMgr := &mockTransactionManager{
-		BeginTxFunc: func(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
-			return (*sql.Tx)(nil), nil
-		},
-	}
-
-	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
-	_ = svc
-
-	t.Logf("Test setup complete - product inactive test structure ready")
-}
-
-func TestReserveItems_NoStockControl(t *testing.T) {
-
-	productRepo := &mockProductRepository{
-		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
-			return &domain.Product{
-				ID:            productID,
-				IsActive:      true,
-				HasStock:      true,
-				Stockeable:    true,
-				ReservedStock: intPtr(100),
-				Stock:         intPtr(0),
-			}, nil
-		},
 		IncrementReservedStockFunc: func(ctx context.Context, tx *sql.Tx, productID int, quantity int) error {
-			return errors.New("should not be called when hasStockControl=false")
+			t.Fatal("IncrementReservedStock should not be called when insufficient available")
+			return nil
 		},
 	}
 
 	orderItemRepo := &mockOrderItemRepository{
 		InsertFunc: func(ctx context.Context, tx *sql.Tx, item domain.OrderItem) (uint, error) {
-			return 1, nil
+			t.Fatal("Insert should not be called when insufficient available")
+			return 0, nil
 		},
 	}
 
 	orderRepo := &mockOrderRepository{
 		UpdateStatusFunc: func(ctx context.Context, tx *sql.Tx, id uint, status string) error {
+			t.Fatal("UpdateStatus should not be called")
 			return nil
 		},
 		UpdateTotalPriceFunc: func(ctx context.Context, tx *sql.Tx, id uint, totalPrice float64) error {
+			t.Fatal("UpdateTotalPrice should not be called")
 			return nil
 		},
 	}
@@ -391,97 +487,20 @@ func TestReserveItems_NoStockControl(t *testing.T) {
 	}
 
 	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
-	_ = svc
+	// available = 20, need 30
+	items := []dto.ReservationItem{{ProductID: 1, Quantity: 30, Price: 100.0}}
 
-	t.Logf("Test setup complete - no stock control test structure ready")
-}
+	result, err := svc.ReserveItems(ctx, 1, 1, items)
 
-func TestReserveItems_ProductNotStockeable(t *testing.T) {
-
-	productRepo := &mockProductRepository{
-		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
-			return &domain.Product{
-				ID:            productID,
-				IsActive:      true,
-				HasStock:      true,
-				Stockeable:    false,
-				ReservedStock: intPtr(100),
-				Stock:         intPtr(0),
-			}, nil
-		},
-		IncrementReservedStockFunc: func(ctx context.Context, tx *sql.Tx, productID int, quantity int) error {
-			return errors.New("should not be called when Stockeable=false")
-		},
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
 	}
 
-	orderItemRepo := &mockOrderItemRepository{
-		InsertFunc: func(ctx context.Context, tx *sql.Tx, item domain.OrderItem) (uint, error) {
-			return 1, nil
-		},
+	if result.Status != dto.ReservationAllFailed {
+		t.Errorf("expected ALL_FAILED, got %s", result.Status)
 	}
 
-	orderRepo := &mockOrderRepository{
-		UpdateStatusFunc: func(ctx context.Context, tx *sql.Tx, id uint, status string) error {
-			return nil
-		},
-		UpdateTotalPriceFunc: func(ctx context.Context, tx *sql.Tx, id uint, totalPrice float64) error {
-			return nil
-		},
+	if len(result.Failures) != 1 || result.Failures[0].Reason != dto.ReasonInsufficientAvailable {
+		t.Errorf("expected ReasonInsufficientAvailable, got %v", result.Failures)
 	}
-
-	txMgr := &mockTransactionManager{
-		BeginTxFunc: func(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
-			return (*sql.Tx)(nil), nil
-		},
-	}
-
-	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
-	_ = svc
-
-	t.Logf("Test setup complete - product not stockeable test structure ready")
-}
-
-func TestReserveItems_DBErrorOnIncrement(t *testing.T) {
-
-	productRepo := &mockProductRepository{
-		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
-			return &domain.Product{
-				ID:            productID,
-				IsActive:      true,
-				HasStock:      true,
-				Stockeable:    true,
-				ReservedStock: intPtr(0),
-				Stock:         intPtr(100),
-			}, nil
-		},
-		IncrementReservedStockFunc: func(ctx context.Context, tx *sql.Tx, productID int, quantity int) error {
-			return errors.New("database error")
-		},
-	}
-
-	orderItemRepo := &mockOrderItemRepository{
-		InsertFunc: func(ctx context.Context, tx *sql.Tx, item domain.OrderItem) (uint, error) {
-			return 0, errors.New("should not be called")
-		},
-	}
-
-	orderRepo := &mockOrderRepository{
-		UpdateStatusFunc: func(ctx context.Context, tx *sql.Tx, id uint, status string) error {
-			return errors.New("should not be called")
-		},
-		UpdateTotalPriceFunc: func(ctx context.Context, tx *sql.Tx, id uint, totalPrice float64) error {
-			return errors.New("should not be called")
-		},
-	}
-
-	txMgr := &mockTransactionManager{
-		BeginTxFunc: func(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
-			return (*sql.Tx)(nil), nil
-		},
-	}
-
-	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
-	_ = svc
-
-	t.Logf("Test setup complete - DB error on increment test structure ready")
 }

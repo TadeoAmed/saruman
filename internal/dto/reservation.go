@@ -15,6 +15,7 @@ const (
 	ReasonOutOfStock            FailureReason = "OUT_OF_STOCK"
 	ReasonInsufficientAvailable FailureReason = "INSUFFICIENT_AVAILABLE"
 	ReasonProductInactive       FailureReason = "PRODUCT_INACTIVE"
+	ReasonProductNotStockeable  FailureReason = "PRODUCT_NOT_STOCKEABLE"
 )
 
 type ItemSuccess struct {

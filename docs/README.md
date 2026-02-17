@@ -40,7 +40,9 @@ Diagrama de secuencia del flujo completo de `ReserveItems`:
 - BEGIN TRANSACTION (Repeatable Read isolation)
 - Para cada item:
   - Fetch product con lock (FOR UPDATE)
-  - Validar stock (si hasStockControl)
+  - Validar producto activo
+  - **Validar stockeability (SIEMPRE, incondicional)**: HasStock=true AND Stockeable=true
+  - **Validar stock disponible (SIEMPRE, incondicional)**: available > 0 AND available >= cantidad
   - Incrementar reserved_stock
   - Crear OrderItem
 
@@ -74,13 +76,19 @@ Diagrama de flujo de decisión para la reserva de **un item individual**:
 1. Fetch product con lock
 2. Validar producto existe
 3. Validar producto activo
-4. Si hasStockControl:
-   - Calcular stock disponible
-   - Validar OUT_OF_STOCK
-   - Validar INSUFFICIENT_AVAILABLE
-   - Incrementar reserved_stock
-5. Crear OrderItem
-6. Retornar Success o Failure
+4. **Validar stockeability (SIEMPRE)**:
+   - HasStock=true AND Stockeable=true
+   - Si NO → Failure: PRODUCT_NOT_STOCKEABLE
+5. **Validar stock disponible (SIEMPRE)**:
+   - Calcular stock disponible = stock - reserved_stock
+   - Si disponible = 0 → Failure: OUT_OF_STOCK
+   - Si disponible < cantidad → Failure: INSUFFICIENT_AVAILABLE
+   - Si disponible >= cantidad → Incrementar reserved_stock
+6. Crear OrderItem
+7. Retornar Success o Failure
+
+**CAMBIO CRÍTICO (Feb 2026)**: Todos los checks de stockeability y stock son **SIEMPRE** ejecutados.
+Antes, se saltaban si `hasStockControl=false`. Ahora son incondicionales.
 
 ---
 
@@ -142,8 +150,40 @@ wire.go: NewModule(db, logger)
   ├─ companyConfigRepo := NewMySQLCompanyConfigRepository(db)
   │
   ├─ service := NewReservationService(db, productRepo, orderItemRepo, orderRepo, logger)
+  │   └─ Implementa: StockReservationService interface
+  │      (sin parámetro hasStockControl - validación siempre ocurre)
   │
   └─ usecase := NewReserveAndAddUseCase(orderRepo, companyConfigRepo, service, logger)
+      └─ Implementa guard company-level: si companyConfig.HasStock=false → error
+         Luego llama service.ReserveItems() para validación product-level (incondicional)
+```
+
+---
+
+## 🔴 Cambio Crítico: Validación de Stock Incondicional (Feb 2026)
+
+### Contexto del Bug
+- **Problema**: Validación de stock era condicional (`if hasStockControl && ...`)
+- **Síntoma**: Items con `stock=2, reserved=2, available=0` eran aceptados
+- **Raíz**: El parámetro `hasStockControl` permitía saltarse validaciones
+
+### Solución Implementada
+1. **Removidas condiciones**: Parámetro `hasStockControl` eliminado de `ReserveItems()`
+2. **Validación SIEMPRE**: Cada producto se valida SIEMPRE:
+   - Debe ser stockeable (`HasStock=true AND Stockeable=true`)
+   - Debe tener stock disponible (> 0 y >= cantidad solicitada)
+3. **Guard company-level**: UseCase valida `companyConfig.HasStock=true` primero
+4. **Nuevo código**: `PRODUCT_NOT_STOCKEABLE` para productos no-stockeable
+
+### Flujo POST-Fix
+```
+UseCase: Si companyConfig.HasStock=false → Error 409 (company guard)
+           ↓
+Service: Para cada item:
+  - SIEMPRE: ¿Producto stockeable? Si no → PRODUCT_NOT_STOCKEABLE
+  - SIEMPRE: ¿Disponible > 0? Si no → OUT_OF_STOCK
+  - SIEMPRE: ¿Disponible >= cantidad? Si no → INSUFFICIENT_AVAILABLE
+  - Insert solo si todos los checks pasan
 ```
 
 ---
