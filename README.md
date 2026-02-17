@@ -2,29 +2,7 @@
 
 Microservicio Go que reemplaza lógica de n8n para Vincula Latam. Gestión robusta de stock y órdenes con transacciones atómicas, manejo de concurrencia y API REST.
 
----
 
-## 🔴 CAMBIOS CRÍTICOS RECIENTES (Febrero 2026)
-
-### Fix: Stock Validation Bug - Validación Incondicional
-
-**Problema**: Items con `stock=2, reserved=2, available=0` eran aceptados en órdenes debido a que la validación de stock era condicional.
-
-**Solución**:
-- ✅ **Validación de stockeability SIEMPRE ocurre**: Cada producto DEBE tener `HasStock=true` AND `Stockeable=true`
-- ✅ **Validación de stock SIEMPRE ocurre**: Verificamos disponibilidad independientemente de configuración
-- ✅ **Guard company-level**: Si `companyConfig.HasStock=false`, retornamos error 409 CONFLICT inmediatamente
-- ✅ **Nuevo código de razón**: `PRODUCT_NOT_STOCKEABLE` para productos no stockeables
-
-**Cambios de API**:
-- `StockReservationService.ReserveItems()` ya NO lleva parámetro `hasStockControl` (ahora incondicional)
-- Nuevo valor de failure reason: `PRODUCT_NOT_STOCKEABLE` (además de `OUT_OF_STOCK`, `INSUFFICIENT_AVAILABLE`)
-
-**Impacto**:
-- Órdenes parciales: Items no-stockeable ahora rechazan individualmente sin rechazar toda la orden
-- Más seguridad contra overselling
-
----
 
 <details>
 <summary><strong>📋 Contexto de la Aplicación</strong></summary>
