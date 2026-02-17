@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"saruman/internal/domain"
@@ -15,6 +16,24 @@ import (
 // Helper function to convert int to *int
 func intPtr(i int) *int {
 	return &i
+}
+
+// Helper to create ReservationService with test defaults
+func newTestReservationService(
+	txMgr TransactionManager,
+	productRepo ProductRepository,
+	orderItemRepo OrderItemRepository,
+	orderRepo OrderRepository,
+) *ReservationService {
+	return NewReservationService(
+		txMgr,
+		productRepo,
+		orderItemRepo,
+		orderRepo,
+		zap.NewNop(),
+		5*time.Second,      // Default test timeout
+		3,                  // Default max retry attempts
+	)
 }
 
 // Mock implementations
@@ -64,7 +83,6 @@ func (m *mockOrderRepository) UpdateTotalPrice(ctx context.Context, tx *sql.Tx, 
 
 func TestReserveItems_ProductNotFound(t *testing.T) {
 	ctx := context.Background()
-	logger := zap.NewNop()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -97,7 +115,7 @@ func TestReserveItems_ProductNotFound(t *testing.T) {
 		},
 	}
 
-	svc := NewReservationService(txMgr, productRepo, orderItemRepo, orderRepo, logger)
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
 	items := []dto.ReservationItem{{ProductID: 1, Quantity: 10, Price: 100.0}}
 
 	result, err := svc.ReserveItems(ctx, 1, 1, items)
@@ -117,7 +135,6 @@ func TestReserveItems_ProductNotFound(t *testing.T) {
 
 func TestReserveItems_ProductInactive(t *testing.T) {
 	ctx := context.Background()
-	logger := zap.NewNop()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -154,7 +171,7 @@ func TestReserveItems_ProductInactive(t *testing.T) {
 		},
 	}
 
-	svc := NewReservationService(txMgr, productRepo, orderItemRepo, orderRepo, logger)
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
 	items := []dto.ReservationItem{{ProductID: 1, Quantity: 10, Price: 100.0}}
 
 	result, err := svc.ReserveItems(ctx, 1, 1, items)
@@ -175,7 +192,6 @@ func TestReserveItems_ProductInactive(t *testing.T) {
 func TestReserveItems_ProductNotStockeable(t *testing.T) {
 	// NEW FIX: validation is now unconditional - Stockeable=false always fails
 	ctx := context.Background()
-	logger := zap.NewNop()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -218,7 +234,7 @@ func TestReserveItems_ProductNotStockeable(t *testing.T) {
 		},
 	}
 
-	svc := NewReservationService(txMgr, productRepo, orderItemRepo, orderRepo, logger)
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
 	items := []dto.ReservationItem{{ProductID: 1, Quantity: 10, Price: 100.0}}
 
 	result, err := svc.ReserveItems(ctx, 1, 1, items)
@@ -239,7 +255,6 @@ func TestReserveItems_ProductNotStockeable(t *testing.T) {
 func TestReserveItems_ProductHasStockFalse(t *testing.T) {
 	// NEW FIX: validation is now unconditional - HasStock=false always fails
 	ctx := context.Background()
-	logger := zap.NewNop()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -282,7 +297,7 @@ func TestReserveItems_ProductHasStockFalse(t *testing.T) {
 		},
 	}
 
-	svc := NewReservationService(txMgr, productRepo, orderItemRepo, orderRepo, logger)
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
 	items := []dto.ReservationItem{{ProductID: 1, Quantity: 10, Price: 100.0}}
 
 	result, err := svc.ReserveItems(ctx, 1, 1, items)
@@ -301,10 +316,9 @@ func TestReserveItems_ProductHasStockFalse(t *testing.T) {
 }
 
 func TestReserveItems_FullyReserved(t *testing.T) {
-	// CRITICAL BUG FIX: Reproduces the exact bug scenario - stock=2, reserved=2, available=0
+	// CRITICAL BUG FIX: Reproduces the exact bug - stock=2, reserved=2, available=0
 	// With the fix, validation is unconditional: should return OUT_OF_STOCK, Insert NOT called
 	ctx := context.Background()
-	logger := zap.NewNop()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -347,7 +361,7 @@ func TestReserveItems_FullyReserved(t *testing.T) {
 		},
 	}
 
-	svc := NewReservationService(txMgr, productRepo, orderItemRepo, orderRepo, logger)
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
 	// Using productID 176, companyID 2 from the bug report
 	items := []dto.ReservationItem{{ProductID: 176, Quantity: 1, Price: 100.0}}
 
@@ -368,7 +382,6 @@ func TestReserveItems_FullyReserved(t *testing.T) {
 
 func TestReserveItems_OutOfStock(t *testing.T) {
 	ctx := context.Background()
-	logger := zap.NewNop()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -411,7 +424,7 @@ func TestReserveItems_OutOfStock(t *testing.T) {
 		},
 	}
 
-	svc := NewReservationService(txMgr, productRepo, orderItemRepo, orderRepo, logger)
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
 	items := []dto.ReservationItem{{ProductID: 1, Quantity: 10, Price: 100.0}}
 
 	result, err := svc.ReserveItems(ctx, 1, 1, items)
@@ -431,7 +444,6 @@ func TestReserveItems_OutOfStock(t *testing.T) {
 
 func TestReserveItems_InsufficientAvailable(t *testing.T) {
 	ctx := context.Background()
-	logger := zap.NewNop()
 
 	productRepo := &mockProductRepository{
 		FindByIDForUpdateFunc: func(ctx context.Context, tx *sql.Tx, productID int, companyID int) (*domain.Product, error) {
@@ -474,7 +486,7 @@ func TestReserveItems_InsufficientAvailable(t *testing.T) {
 		},
 	}
 
-	svc := NewReservationService(txMgr, productRepo, orderItemRepo, orderRepo, logger)
+	svc := newTestReservationService(txMgr, productRepo, orderItemRepo, orderRepo)
 	// available = 20, need 30
 	items := []dto.ReservationItem{{ProductID: 1, Quantity: 30, Price: 100.0}}
 

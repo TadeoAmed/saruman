@@ -29,11 +29,13 @@ type OrderRepository interface {
 }
 
 type ReservationService struct {
-	db            TransactionManager
-	productRepo   ProductRepository
-	orderItemRepo OrderItemRepository
-	orderRepo     OrderRepository
-	logger        *zap.Logger
+	db              TransactionManager
+	productRepo     ProductRepository
+	orderItemRepo   OrderItemRepository
+	orderRepo       OrderRepository
+	logger          *zap.Logger
+	txTimeout       time.Duration
+	maxRetryAttempts int
 }
 
 func NewReservationService(
@@ -42,13 +44,17 @@ func NewReservationService(
 	orderItemRepo OrderItemRepository,
 	orderRepo OrderRepository,
 	logger *zap.Logger,
+	txTimeout time.Duration,
+	maxRetryAttempts int,
 ) *ReservationService {
 	return &ReservationService{
-		db:            db,
-		productRepo:   productRepo,
-		orderItemRepo: orderItemRepo,
-		orderRepo:     orderRepo,
-		logger:        logger,
+		db:               db,
+		productRepo:      productRepo,
+		orderItemRepo:    orderItemRepo,
+		orderRepo:        orderRepo,
+		logger:           logger,
+		txTimeout:        txTimeout,
+		maxRetryAttempts: maxRetryAttempts,
 	}
 }
 
@@ -59,7 +65,7 @@ func (s *ReservationService) ReserveItems(
 	items []dto.ReservationItem,
 ) (*dto.ReservationResult, error) {
 	// Bloque 1: Iniciar transacción con timeout
-	txCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	txCtx, cancel := context.WithTimeout(ctx, s.txTimeout)
 	defer cancel()
 
 	tx, err := s.db.BeginTx(txCtx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
