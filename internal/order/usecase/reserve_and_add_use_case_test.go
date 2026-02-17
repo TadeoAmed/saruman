@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/go-sql-driver/mysql"
@@ -34,11 +35,11 @@ func (m *mockCompanyConfigRepository) FindByCompanyID(ctx context.Context, compa
 }
 
 type mockStockReservationService struct {
-	ReserveItemsFunc func(ctx context.Context, orderID uint, companyID int, items []dto.ReservationItem, hasStockControl bool) (*dto.ReservationResult, error)
+	ReserveItemsFunc func(ctx context.Context, orderID uint, companyID int, items []dto.ReservationItem) (*dto.ReservationResult, error)
 }
 
-func (m *mockStockReservationService) ReserveItems(ctx context.Context, orderID uint, companyID int, items []dto.ReservationItem, hasStockControl bool) (*dto.ReservationResult, error) {
-	return m.ReserveItemsFunc(ctx, orderID, companyID, items, hasStockControl)
+func (m *mockStockReservationService) ReserveItems(ctx context.Context, orderID uint, companyID int, items []dto.ReservationItem) (*dto.ReservationResult, error) {
+	return m.ReserveItemsFunc(ctx, orderID, companyID, items)
 }
 
 // Tests
@@ -188,7 +189,7 @@ func TestReserveItems_AllSuccess(t *testing.T) {
 	}
 
 	reservationSvc := &mockStockReservationService{
-		ReserveItemsFunc: func(ctx context.Context, orderID uint, companyID int, items []dto.ReservationItem, hasStockControl bool) (*dto.ReservationResult, error) {
+		ReserveItemsFunc: func(ctx context.Context, orderID uint, companyID int, items []dto.ReservationItem) (*dto.ReservationResult, error) {
 			return &dto.ReservationResult{
 				Status:  dto.ReservationAllSuccess,
 				OrderID: orderID,
@@ -251,7 +252,7 @@ func TestReserveItems_AllFailed(t *testing.T) {
 	}
 
 	reservationSvc := &mockStockReservationService{
-		ReserveItemsFunc: func(ctx context.Context, orderID uint, companyID int, items []dto.ReservationItem, hasStockControl bool) (*dto.ReservationResult, error) {
+		ReserveItemsFunc: func(ctx context.Context, orderID uint, companyID int, items []dto.ReservationItem) (*dto.ReservationResult, error) {
 			return &dto.ReservationResult{
 				Status:  dto.ReservationAllFailed,
 				OrderID: orderID,
@@ -311,7 +312,7 @@ func TestReserveItems_ItemsSortedByProductID(t *testing.T) {
 	}
 
 	reservationSvc := &mockStockReservationService{
-		ReserveItemsFunc: func(ctx context.Context, orderID uint, companyID int, items []dto.ReservationItem, hasStockControl bool) (*dto.ReservationResult, error) {
+		ReserveItemsFunc: func(ctx context.Context, orderID uint, companyID int, items []dto.ReservationItem) (*dto.ReservationResult, error) {
 			receivedItems = items
 			return &dto.ReservationResult{
 				Status:  dto.ReservationAllSuccess,
@@ -378,7 +379,7 @@ func TestReserveItems_DeadlockRetry(t *testing.T) {
 	}
 
 	reservationSvc := &mockStockReservationService{
-		ReserveItemsFunc: func(ctx context.Context, orderID uint, companyID int, items []dto.ReservationItem, hasStockControl bool) (*dto.ReservationResult, error) {
+		ReserveItemsFunc: func(ctx context.Context, orderID uint, companyID int, items []dto.ReservationItem) (*dto.ReservationResult, error) {
 			attemptCount++
 			if attemptCount == 1 {
 				// First attempt: deadlock
@@ -439,7 +440,7 @@ func TestReserveItems_DeadlockMaxRetries(t *testing.T) {
 	}
 
 	reservationSvc := &mockStockReservationService{
-		ReserveItemsFunc: func(ctx context.Context, orderID uint, companyID int, items []dto.ReservationItem, hasStockControl bool) (*dto.ReservationResult, error) {
+		ReserveItemsFunc: func(ctx context.Context, orderID uint, companyID int, items []dto.ReservationItem) (*dto.ReservationResult, error) {
 			attemptCount++
 			// Always deadlock
 			return nil, createDeadlockError()
@@ -464,5 +465,53 @@ func TestReserveItems_DeadlockMaxRetries(t *testing.T) {
 
 	if attemptCount != 3 {
 		t.Errorf("expected 3 attempts, got %d", attemptCount)
+	}
+}
+
+func TestReserveItems_CompanyNotStockeable(t *testing.T) {
+	// Company-level guard: HasStock=false should fail with ConflictError before calling service
+	ctx := context.Background()
+	logger := zap.NewNop()
+
+	orderRepo := &mockOrderRepository{
+		FindByIDFunc: func(ctx context.Context, id uint) (*domain.Order, error) {
+			return &domain.Order{
+				ID:        id,
+				CompanyID: 1,
+				Status:    domain.OrderStatusPending,
+			}, nil
+		},
+	}
+
+	companyConfigRepo := &mockCompanyConfigRepository{
+		FindByCompanyIDFunc: func(ctx context.Context, companyID int) (*domain.CompanyConfig, error) {
+			return &domain.CompanyConfig{
+				CompanyID: companyID,
+				HasStock:  false, // Company does not sell stockeable products
+			}, nil
+		},
+	}
+
+	reservationSvc := &mockStockReservationService{
+		ReserveItemsFunc: func(ctx context.Context, orderID uint, companyID int, items []dto.ReservationItem) (*dto.ReservationResult, error) {
+			// This should NOT be called when company HasStock=false
+			return nil, errors.New("ReserveItems should not be called when company HasStock=false")
+		},
+	}
+
+	uc := NewReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc, logger)
+
+	items := []dto.ReservationItem{
+		{ProductID: 1, Quantity: 10, Price: 100.0},
+	}
+
+	_, err := uc.ReserveItems(ctx, 1, 1, items)
+
+	if err == nil {
+		t.Errorf("expected ConflictError, got nil")
+	}
+
+	if _, ok := dtoerrors.IsConflictError(err); !ok {
+		t.Errorf("expected ConflictError, got %T: %v", err, err)
 	}
 }

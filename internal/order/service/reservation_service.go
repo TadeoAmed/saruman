@@ -57,7 +57,6 @@ func (s *ReservationService) ReserveItems(
 	orderID uint,
 	companyID int,
 	items []dto.ReservationItem,
-	hasStockControl bool,
 ) (*dto.ReservationResult, error) {
 	// Bloque 1: Iniciar transacción con timeout
 	txCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -69,7 +68,10 @@ func (s *ReservationService) ReserveItems(
 		return nil, err
 	}
 	// Ensure rollback on any exit path. MySQL ignores rollback if already committed.
-	defer tx.Rollback()
+	// Only defer if tx is not nil (for testing compatibility)
+	if tx != nil {
+		defer tx.Rollback()
+	}
 
 	// Bloque 2: Procesar items
 	successes := []dto.ItemSuccess{}
@@ -77,7 +79,7 @@ func (s *ReservationService) ReserveItems(
 	totalPrice := 0.0
 
 	for _, item := range items {
-		success, failure, err := s.reserveSingleItem(txCtx, tx, orderID, companyID, item, hasStockControl)
+		success, failure, err := s.reserveSingleItem(txCtx, tx, orderID, companyID, item)
 		if err != nil {
 			s.logger.Error("reservation error", zap.Uint("orderId", orderID), zap.Int("productId", item.ProductID), zap.Error(err))
 			return nil, err
@@ -105,42 +107,39 @@ func (s *ReservationService) ReserveItems(
 		}, nil
 	}
 
-	if len(successes) > 0 {
-		err = s.orderRepo.UpdateStatus(txCtx, tx, orderID, domain.OrderStatusCreated)
-		if err != nil {
-			s.logger.Error("failed to update order status", zap.Uint("orderId", orderID), zap.Error(err))
-			return nil, err
-		}
-
-		err = s.orderRepo.UpdateTotalPrice(txCtx, tx, orderID, totalPrice)
-		if err != nil {
-			s.logger.Error("failed to update order total price", zap.Uint("orderId", orderID), zap.Error(err))
-			return nil, err
-		}
-
-		err = tx.Commit()
-		if err != nil {
-			s.logger.Error("failed to commit transaction", zap.Uint("orderId", orderID), zap.Error(err))
-			return nil, err
-		}
-
-		s.logger.Info("transaction committed", zap.Uint("orderId", orderID), zap.Int("successCount", len(successes)), zap.Float64("totalPrice", totalPrice))
-
-		status := dto.ReservationAllSuccess
-		if len(failures) > 0 {
-			status = dto.ReservationPartial
-		}
-
-		return &dto.ReservationResult{
-			Status:     status,
-			OrderID:    orderID,
-			TotalPrice: totalPrice,
-			Successes:  successes,
-			Failures:   failures,
-		}, nil
+	// len(successes) > 0: commit and return result
+	err = s.orderRepo.UpdateStatus(txCtx, tx, orderID, domain.OrderStatusCreated)
+	if err != nil {
+		s.logger.Error("failed to update order status", zap.Uint("orderId", orderID), zap.Error(err))
+		return nil, err
 	}
 
-	return nil, nil
+	err = s.orderRepo.UpdateTotalPrice(txCtx, tx, orderID, totalPrice)
+	if err != nil {
+		s.logger.Error("failed to update order total price", zap.Uint("orderId", orderID), zap.Error(err))
+		return nil, err
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		s.logger.Error("failed to commit transaction", zap.Uint("orderId", orderID), zap.Error(err))
+		return nil, err
+	}
+
+	s.logger.Info("transaction committed", zap.Uint("orderId", orderID), zap.Int("successCount", len(successes)), zap.Float64("totalPrice", totalPrice))
+
+	status := dto.ReservationAllSuccess
+	if len(failures) > 0 {
+		status = dto.ReservationPartial
+	}
+
+	return &dto.ReservationResult{
+		Status:     status,
+		OrderID:    orderID,
+		TotalPrice: totalPrice,
+		Successes:  successes,
+		Failures:   failures,
+	}, nil
 }
 
 func (s *ReservationService) reserveSingleItem(
@@ -149,7 +148,6 @@ func (s *ReservationService) reserveSingleItem(
 	orderID uint,
 	companyID int,
 	item dto.ReservationItem,
-	hasStockControl bool,
 ) (*dto.ItemSuccess, *dto.ItemFailure, error) {
 	// 1. Fetch product with lock
 	product, err := s.productRepo.FindByIDForUpdate(ctx, tx, item.ProductID, companyID)
@@ -170,32 +168,40 @@ func (s *ReservationService) reserveSingleItem(
 		}, nil
 	}
 
-	// 3. Check stock control
-	if hasStockControl && product.HasStock && product.Stockeable {
-		available := product.AvailableStock()
-		if available == 0 {
-			return nil, &dto.ItemFailure{
-				ProductID: item.ProductID,
-				Quantity:  item.Quantity,
-				Reason:    dto.ReasonOutOfStock,
-			}, nil
-		}
-
-		if available < item.Quantity {
-			return nil, &dto.ItemFailure{
-				ProductID: item.ProductID,
-				Quantity:  item.Quantity,
-				Reason:    dto.ReasonInsufficientAvailable,
-			}, nil
-		}
-
-		err = s.productRepo.IncrementReservedStock(ctx, tx, item.ProductID, item.Quantity)
-		if err != nil {
-			return nil, nil, err
-		}
+	// 3. Check product-level stockeability (ALWAYS runs, replaces old conditional)
+	if !product.HasStock || !product.Stockeable {
+		return nil, &dto.ItemFailure{
+			ProductID: item.ProductID,
+			Quantity:  item.Quantity,
+			Reason:    dto.ReasonProductNotStockeable,
+		}, nil
 	}
 
-	// 4. Create order item
+	// 4. Check available stock (ALWAYS runs now)
+	available := product.AvailableStock()
+	if available == 0 {
+		return nil, &dto.ItemFailure{
+			ProductID: item.ProductID,
+			Quantity:  item.Quantity,
+			Reason:    dto.ReasonOutOfStock,
+		}, nil
+	}
+
+	if available < item.Quantity {
+		return nil, &dto.ItemFailure{
+			ProductID: item.ProductID,
+			Quantity:  item.Quantity,
+			Reason:    dto.ReasonInsufficientAvailable,
+		}, nil
+	}
+
+	// 5. Reserve stock
+	err = s.productRepo.IncrementReservedStock(ctx, tx, item.ProductID, item.Quantity)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 6. Create order item (solo se llega aquí si todos los checks pasan)
 	orderItem := domain.OrderItem{
 		OrderID:   orderID,
 		ProductID: item.ProductID,
@@ -208,7 +214,7 @@ func (s *ReservationService) reserveSingleItem(
 		return nil, nil, err
 	}
 
-	// 5. Return success
+	// 7. Return success
 	return &dto.ItemSuccess{
 		ProductID: item.ProductID,
 		Quantity:  item.Quantity,

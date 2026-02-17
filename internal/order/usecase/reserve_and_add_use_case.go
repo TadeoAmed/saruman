@@ -20,7 +20,6 @@ type StockReservationService interface {
 		orderID uint,
 		companyID int,
 		items []dto.ReservationItem,
-		hasStockControl bool,
 	) (*dto.ReservationResult, error)
 }
 
@@ -87,14 +86,16 @@ func (uc *ReserveAndAddUseCase) ReserveItems(
 		return nil, err
 	}
 
-	hasStockControl := companyConfig.HasStock
-	uc.logger.Debug("pre-validation passed", zap.Uint("orderId", orderID), zap.String("orderStatus", order.Status), zap.Bool("hasStockControl", hasStockControl))
+	if !companyConfig.HasStock {
+		return nil, dtoerrors.NewConflictError("la compañía solicitada no vende productos stockeables")
+	}
+	uc.logger.Debug("pre-validation passed", zap.Uint("orderId", orderID), zap.String("orderStatus", order.Status))
 
 	// Bloque 3: Ordenar items por productId ASC (anti-deadlock)
 	sort.Slice(items, func(i, j int) bool { return items[i].ProductID < items[j].ProductID })
 
 	// Bloque 4: Llamar service con retry
-	return uc.reserveItemsWithRetry(ctx, orderID, companyID, items, hasStockControl)
+	return uc.reserveItemsWithRetry(ctx, orderID, companyID, items)
 }
 
 func (uc *ReserveAndAddUseCase) reserveItemsWithRetry(
@@ -102,13 +103,12 @@ func (uc *ReserveAndAddUseCase) reserveItemsWithRetry(
 	orderID uint,
 	companyID int,
 	items []dto.ReservationItem,
-	hasStockControl bool,
 ) (*dto.ReservationResult, error) {
 	maxAttempts := 3
 	backoffs := []time.Duration{0, 100 * time.Millisecond, 200 * time.Millisecond}
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		result, err := uc.reservationSvc.ReserveItems(ctx, orderID, companyID, items, hasStockControl)
+		result, err := uc.reservationSvc.ReserveItems(ctx, orderID, companyID, items)
 		if err == nil {
 			return result, nil
 		}
