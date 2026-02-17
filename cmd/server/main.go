@@ -38,7 +38,7 @@ func main() {
 	zapLogger.Info("database connected")
 
 	productCtrl := product.NewModule(db, zapLogger)
-	orderCtrl := order.NewModule(db, zapLogger)
+	orderCtrl := order.NewModule(db, cfg, zapLogger)
 
 	router := server.NewRouter(productCtrl, orderCtrl, zapLogger)
 

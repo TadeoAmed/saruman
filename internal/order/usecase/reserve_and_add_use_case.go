@@ -37,6 +37,7 @@ type ReserveAndAddUseCase struct {
 	companyConfigRepo CompanyConfigRepository
 	reservationSvc    StockReservationService
 	logger            *zap.Logger
+	maxRetryAttempts  int
 }
 
 func NewReserveAndAddUseCase(
@@ -44,12 +45,14 @@ func NewReserveAndAddUseCase(
 	companyConfigRepo CompanyConfigRepository,
 	reservationSvc StockReservationService,
 	logger *zap.Logger,
+	maxRetryAttempts int,
 ) *ReserveAndAddUseCase {
 	return &ReserveAndAddUseCase{
-		orderRepo:         orderRepo,
+		orderRepo:        orderRepo,
 		companyConfigRepo: companyConfigRepo,
-		reservationSvc:    reservationSvc,
-		logger:            logger,
+		reservationSvc:   reservationSvc,
+		logger:           logger,
+		maxRetryAttempts: maxRetryAttempts,
 	}
 }
 
@@ -104,7 +107,8 @@ func (uc *ReserveAndAddUseCase) reserveItemsWithRetry(
 	items []dto.ReservationItem,
 	hasStockControl bool,
 ) (*dto.ReservationResult, error) {
-	maxAttempts := 3
+	maxAttempts := uc.maxRetryAttempts
+	// Backoff intervals: attempt 1 (0ms), attempt 2 (100ms), attempt 3 (200ms), etc.
 	backoffs := []time.Duration{0, 100 * time.Millisecond, 200 * time.Millisecond}
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
