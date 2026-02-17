@@ -11,6 +11,7 @@ import (
 	"saruman/internal/commons"
 	"saruman/internal/infrastructure/logger"
 	"saruman/internal/infrastructure/mysql"
+	"saruman/internal/order"
 	"saruman/internal/product"
 	"saruman/internal/server"
 
@@ -37,8 +38,9 @@ func main() {
 	zapLogger.Info("database connected")
 
 	productCtrl := product.NewModule(db, zapLogger)
+	orderCtrl := order.NewModule(db, zapLogger)
 
-	router := server.NewRouter(productCtrl, zapLogger)
+	router := server.NewRouter(productCtrl, orderCtrl, zapLogger)
 
 	srv := server.New(cfg.Server.Port, router, zapLogger)
 

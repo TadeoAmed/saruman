@@ -4,7 +4,8 @@ import (
 	"net/http"
 	"time"
 
-	"saruman/internal/product/controller"
+	ordercontroller "saruman/internal/order/controller"
+	productcontroller "saruman/internal/product/controller"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -12,7 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func NewRouter(productCtrl *controller.Controller, logger *zap.Logger) *chi.Mux {
+func NewRouter(productCtrl *productcontroller.Controller, orderCtrl *ordercontroller.ReserveAndAddController, logger *zap.Logger) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Recoverer)
@@ -26,6 +27,9 @@ func NewRouter(productCtrl *controller.Controller, logger *zap.Logger) *chi.Mux 
 	})
 
 	r.Post("/products/search", productCtrl.HandleSearchProducts)
+	r.Route("/orders/{orderId}", func(r chi.Router) {
+		r.Post("/reserve-and-add", orderCtrl.ReserveAndAdd)
+	})
 
 	return r
 }

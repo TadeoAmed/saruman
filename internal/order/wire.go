@@ -4,6 +4,7 @@ import (
 	"database/sql"
 
 	companyrepo "saruman/internal/company/repository"
+	ordercontroller "saruman/internal/order/controller"
 	orderrepo "saruman/internal/order/repository"
 	"saruman/internal/order/service"
 	"saruman/internal/order/usecase"
@@ -11,7 +12,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func NewModule(db *sql.DB, logger *zap.Logger) *usecase.ReserveAndAddUseCase {
+func NewModule(db *sql.DB, logger *zap.Logger) *ordercontroller.ReserveAndAddController {
 	orderRepo := orderrepo.NewMySQLOrderRepository(db)
 	orderItemRepo := orderrepo.NewMySQLOrderItemRepository(db)
 	productRepo := productrepo.NewMySQLRepository(db)
@@ -19,5 +20,6 @@ func NewModule(db *sql.DB, logger *zap.Logger) *usecase.ReserveAndAddUseCase {
 
 	reservationSvc := service.NewReservationService(db, productRepo, orderItemRepo, orderRepo, logger)
 
-	return usecase.NewReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc, logger)
+	uc := usecase.NewReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc, logger)
+	return ordercontroller.NewReserveAndAddController(uc, logger)
 }
