@@ -6,7 +6,6 @@ type Config struct {
 	Server   ServerConfig   `yaml:"server"`
 	Database DatabaseConfig `yaml:"database"`
 	Log      LogConfig      `yaml:"log"`
-	Order    OrderConfig    `yaml:"order"`
 }
 
 type ServerConfig struct {
@@ -26,9 +25,4 @@ type DatabaseConfig struct {
 
 type LogConfig struct {
 	Level string `yaml:"level"`
-}
-
-type OrderConfig struct {
-	ReservationTxTimeout time.Duration `yaml:"reservation_tx_timeout"`
-	MaxRetryAttempts     int           `yaml:"max_retry_attempts"`
 }

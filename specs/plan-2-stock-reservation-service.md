@@ -255,11 +255,11 @@ func NewReserveAndAddUseCase(
 
 **Responsabilidad del use case:** Orquestación pura (pre-validaciones, mapeo de datos, llamada al service con retry). NO maneja transacciones ni infraestructura. El service es quien maneja la transacción internamente.
 
-### 4.3 Método `ReserveItems`
+### 4.3 Método `Execute`
 
 Firma:
 ```go
-func (uc *ReserveAndAddUseCase) ReserveItems(
+func (uc *ReserveAndAddUseCase) Execute(
     ctx context.Context,
     orderID uint,
     companyID int,
@@ -284,14 +284,14 @@ Lógica en orden:
 - Usar `sort.Slice(items, func(i, j int) bool { return items[i].ProductID < items[j].ProductID })`
 
 **Bloque 4: Llamar service con retry**
-- Llamar `uc.reserveItemsWithRetry(ctx, orderID, companyID, items, hasStockControl)` que encapsula el retry lógico
+- Llamar `uc.executeWithRetry(ctx, orderID, companyID, items, hasStockControl)` que encapsula el retry lógico
 - Retornar result o error
 - El service maneja internamente la transacción (Begin, Commit, Rollback)
 
-### 4.4 Método privado `reserveItemsWithRetry`
+### 4.4 Método privado `executeWithRetry`
 
 ```go
-func (uc *ReserveAndAddUseCase) reserveItemsWithRetry(
+func (uc *ReserveAndAddUseCase) executeWithRetry(
     ctx context.Context,
     orderID uint,
     companyID int,
