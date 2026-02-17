@@ -4,6 +4,28 @@ Microservicio Go que reemplaza lógica de n8n para Vincula Latam. Gestión robus
 
 ---
 
+## 🔴 CAMBIOS CRÍTICOS RECIENTES (Febrero 2026)
+
+### Fix: Stock Validation Bug - Validación Incondicional
+
+**Problema**: Items con `stock=2, reserved=2, available=0` eran aceptados en órdenes debido a que la validación de stock era condicional.
+
+**Solución**:
+- ✅ **Validación de stockeability SIEMPRE ocurre**: Cada producto DEBE tener `HasStock=true` AND `Stockeable=true`
+- ✅ **Validación de stock SIEMPRE ocurre**: Verificamos disponibilidad independientemente de configuración
+- ✅ **Guard company-level**: Si `companyConfig.HasStock=false`, retornamos error 409 CONFLICT inmediatamente
+- ✅ **Nuevo código de razón**: `PRODUCT_NOT_STOCKEABLE` para productos no stockeables
+
+**Cambios de API**:
+- `StockReservationService.ReserveItems()` ya NO lleva parámetro `hasStockControl` (ahora incondicional)
+- Nuevo valor de failure reason: `PRODUCT_NOT_STOCKEABLE` (además de `OUT_OF_STOCK`, `INSUFFICIENT_AVAILABLE`)
+
+**Impacto**:
+- Órdenes parciales: Items no-stockeable ahora rechazan individualmente sin rechazar toda la orden
+- Más seguridad contra overselling
+
+---
+
 <details>
 <summary><strong>📋 Contexto de la Aplicación</strong></summary>
 
@@ -334,16 +356,25 @@ Controller retorna: { "products": [...], "notFound": [...] }
 BEGIN TRANSACTION
     ↓
 Para cada item (ordenado por productId ASC):
-    ├─ SELECT id, stock, reserved_stock FROM Product WHERE id=X FOR UPDATE
+    ├─ SELECT id, stock, reserved_stock, hasStock, stockeable FROM Product WHERE id=X FOR UPDATE
     │   (bloquea filas para evitar race conditions)
     │
-    ├─ VALIDAR: (stock - reserved_stock) >= cantidad_solicitada?
+    ├─ VALIDAR: Producto activo?
+    │
+    ├─ VALIDAR: ¿hasStock=true AND stockeable=true? (SIEMPRE, incondicional)
+    │   ├─ NO → Agregar a "failures" con razón PRODUCT_NOT_STOCKEABLE
+    │   └─ SÍ → Continuar
+    │
+    ├─ VALIDAR: (stock - reserved_stock) >= cantidad_solicitada? (SIEMPRE, incondicional)
+    │   ├─ Disponible = 0 → Agregar a "failures" con razón OUT_OF_STOCK
+    │   ├─ Disponible < cantidad → Agregar a "failures" con razón INSUFFICIENT_AVAILABLE
+    │   └─ Disponible >= cantidad → Continuar
     │
     ├─ SI ✓ → UPDATE Product SET reserved_stock += cantidad
     │       → INSERT INTO OrderItems (orderId, productId, qty, price)
     │       → Agregar a "successes"
     │
-    └─ SI ✗ → Agregar a "failures" con razón (OUT_OF_STOCK, INSUFFICIENT_AVAILABLE)
+    └─ SI ✗ → Agregar a "failures" con razón específica
 
 Si al menos 1 success:
     ├─ UPDATE Orders SET status = CREATED
@@ -352,6 +383,11 @@ Si al menos 1 success:
 Si 0 successes:
     └─ ROLLBACK → Retorna 422 (ninguno procesado)
 ```
+
+**CAMBIO CRÍTICO (Feb 2026)**: La validación de stock **SIEMPRE ocurre**, independientemente de `companyConfig.HasStock`.
+- **Antes**: Se saltaba validación si company tenía `HasStock=false`
+- **Ahora**: SIEMPRE se valida que cada producto sea stockeable (HasStock && Stockeable)
+- **Razón**: Prevenir overselling - items con `stock=2, reserved=2, available=0` ahora son correctamente rechazados
 
 **Ejemplo de race condition resuelta**:
 
@@ -367,9 +403,15 @@ Transacción B → UPDATE a 50      Transacción B → ahora lee (100,50)
 ```
 
 **Validaciones**:
+- ✅ **Company-level (UseCase)**: companyConfig.HasStock debe ser `true` (si es false → error CONFLICT inmediato)
 - ✅ orderId existe y está en estado PENDING
 - ✅ companyId coincide con la orden
 - ✅ Cada productId pertenece a la companyId
+- ✅ **Product-level (Service, SIEMPRE)**:
+  - Producto activo: `IsActive=true`
+  - Producto stockeable: `HasStock=true` AND `Stockeable=true`
+  - Stock disponible: `(stock - reserved_stock) > 0`
+  - Cantidad suficiente: `(stock - reserved_stock) >= cantidad_solicitada`
 - ✅ Cantidades entre 1 y 10,000
 - ✅ Sin items duplicados en el request
 
@@ -631,9 +673,20 @@ POST /orders/{orderId}/reserve-and-add:
 | 400 | `VALIDATION_ERROR` | Validation failed | Invalid input (orderId, companyId, items, quantities, prices, duplicates) |
 | 404 | `NOT_FOUND` | order not found | Order ID no existe en base de datos |
 | 409 | `CONFLICT` | order is not in PENDING status | La orden debe estar en estado PENDING |
+| 409 | `CONFLICT` | la compañía solicitada no vende productos stockeables | `companyConfig.HasStock=false` - guard company-level |
 | 403 | `FORBIDDEN` | company mismatch | companyId no coincide con la orden |
 | 409 | `DEADLOCK` | max retries exceeded | Deadlock en BD, reintentable |
 | 500 | `INTERNAL_ERROR` | an unexpected error occurred | Error interno del servidor |
+
+### Razones de fallos en items (dentro de response exitoso)
+
+| Código | Razón | Cuándo ocurre |
+|--------|-------|--------------|
+| `NOT_FOUND` | Producto no existe | ProductId no pertenece a la compañía |
+| `PRODUCT_INACTIVE` | Producto inactivo | `product.IsActive=false` |
+| **`PRODUCT_NOT_STOCKEABLE`** | Producto no stockeable | `product.HasStock=false` OR `product.Stockeable=false` (**SIEMPRE validado**) |
+| `OUT_OF_STOCK` | Sin stock disponible | `availableStock = 0` (**SIEMPRE validado**) |
+| `INSUFFICIENT_AVAILABLE` | Stock insuficiente | `availableStock < cantidad_solicitada` (**SIEMPRE validado**) |
 
 ### Respuestas
 
@@ -660,7 +713,10 @@ POST /orders/{orderId}/reserve-and-add:
   "totalPrice": 21.00,
   "addedItems": [101],
   "successes": [{"productId": 101, "quantity": 2}],
-  "failures": [{"productId": 102, "quantity": 5, "reason": "OUT_OF_STOCK"}],
+  "failures": [
+    {"productId": 102, "quantity": 5, "reason": "OUT_OF_STOCK"},
+    {"productId": 103, "quantity": 3, "reason": "PRODUCT_NOT_STOCKEABLE"}
+  ],
   "timestamp": "2026-02-17T15:30:45Z"
 }
 ```
