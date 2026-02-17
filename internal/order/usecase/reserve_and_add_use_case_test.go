@@ -16,6 +16,21 @@ func createDeadlockError() error {
 	return &mysql.MySQLError{Number: 1213}
 }
 
+// Helper to create ReserveAndAddUseCase with test defaults
+func newTestReserveAndAddUseCase(
+	orderRepo OrderRepository,
+	companyConfigRepo CompanyConfigRepository,
+	reservationSvc StockReservationService,
+) *ReserveAndAddUseCase {
+	return NewReserveAndAddUseCase(
+		orderRepo,
+		companyConfigRepo,
+		reservationSvc,
+		zap.NewNop(),
+		3, // Default max retry attempts
+	)
+}
+
 // Mock implementations
 type mockOrderRepository struct {
 	FindByIDFunc func(ctx context.Context, id uint) (*domain.Order, error)
@@ -45,7 +60,6 @@ func (m *mockStockReservationService) ReserveItems(ctx context.Context, orderID 
 
 func TestReserveItems_OrderNotFound(t *testing.T) {
 	ctx := context.Background()
-	logger := zap.NewNop()
 
 	orderRepo := &mockOrderRepository{
 		FindByIDFunc: func(ctx context.Context, id uint) (*domain.Order, error) {
@@ -56,7 +70,7 @@ func TestReserveItems_OrderNotFound(t *testing.T) {
 	companyConfigRepo := &mockCompanyConfigRepository{}
 	reservationSvc := &mockStockReservationService{}
 
-	uc := NewReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc, logger)
+	uc := newTestReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc)
 
 	_, err := uc.ReserveItems(ctx, 1, 1, []dto.ReservationItem{})
 
@@ -71,7 +85,6 @@ func TestReserveItems_OrderNotFound(t *testing.T) {
 
 func TestReserveItems_OrderNotPending(t *testing.T) {
 	ctx := context.Background()
-	logger := zap.NewNop()
 
 	orderRepo := &mockOrderRepository{
 		FindByIDFunc: func(ctx context.Context, id uint) (*domain.Order, error) {
@@ -86,7 +99,7 @@ func TestReserveItems_OrderNotPending(t *testing.T) {
 	companyConfigRepo := &mockCompanyConfigRepository{}
 	reservationSvc := &mockStockReservationService{}
 
-	uc := NewReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc, logger)
+	uc := newTestReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc)
 
 	_, err := uc.ReserveItems(ctx, 1, 1, []dto.ReservationItem{})
 
@@ -101,7 +114,6 @@ func TestReserveItems_OrderNotPending(t *testing.T) {
 
 func TestReserveItems_CompanyMismatch(t *testing.T) {
 	ctx := context.Background()
-	logger := zap.NewNop()
 
 	orderRepo := &mockOrderRepository{
 		FindByIDFunc: func(ctx context.Context, id uint) (*domain.Order, error) {
@@ -116,7 +128,7 @@ func TestReserveItems_CompanyMismatch(t *testing.T) {
 	companyConfigRepo := &mockCompanyConfigRepository{}
 	reservationSvc := &mockStockReservationService{}
 
-	uc := NewReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc, logger)
+	uc := newTestReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc)
 
 	_, err := uc.ReserveItems(ctx, 1, 1, []dto.ReservationItem{})
 
@@ -131,7 +143,6 @@ func TestReserveItems_CompanyMismatch(t *testing.T) {
 
 func TestReserveItems_CompanyConfigNotFound(t *testing.T) {
 	ctx := context.Background()
-	logger := zap.NewNop()
 
 	orderRepo := &mockOrderRepository{
 		FindByIDFunc: func(ctx context.Context, id uint) (*domain.Order, error) {
@@ -151,7 +162,7 @@ func TestReserveItems_CompanyConfigNotFound(t *testing.T) {
 
 	reservationSvc := &mockStockReservationService{}
 
-	uc := NewReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc, logger)
+	uc := newTestReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc)
 
 	_, err := uc.ReserveItems(ctx, 1, 1, []dto.ReservationItem{})
 
@@ -166,7 +177,6 @@ func TestReserveItems_CompanyConfigNotFound(t *testing.T) {
 
 func TestReserveItems_AllSuccess(t *testing.T) {
 	ctx := context.Background()
-	logger := zap.NewNop()
 
 	orderRepo := &mockOrderRepository{
 		FindByIDFunc: func(ctx context.Context, id uint) (*domain.Order, error) {
@@ -201,7 +211,7 @@ func TestReserveItems_AllSuccess(t *testing.T) {
 		},
 	}
 
-	uc := NewReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc, logger)
+	uc := newTestReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc)
 
 	items := []dto.ReservationItem{
 		{ProductID: 1, Quantity: 10, Price: 100.0},
@@ -229,7 +239,6 @@ func TestReserveItems_AllSuccess(t *testing.T) {
 
 func TestReserveItems_AllFailed(t *testing.T) {
 	ctx := context.Background()
-	logger := zap.NewNop()
 
 	orderRepo := &mockOrderRepository{
 		FindByIDFunc: func(ctx context.Context, id uint) (*domain.Order, error) {
@@ -263,7 +272,7 @@ func TestReserveItems_AllFailed(t *testing.T) {
 		},
 	}
 
-	uc := NewReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc, logger)
+	uc := newTestReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc)
 
 	items := []dto.ReservationItem{
 		{ProductID: 1, Quantity: 10, Price: 100.0},
@@ -287,7 +296,6 @@ func TestReserveItems_AllFailed(t *testing.T) {
 
 func TestReserveItems_ItemsSortedByProductID(t *testing.T) {
 	ctx := context.Background()
-	logger := zap.NewNop()
 
 	var receivedItems []dto.ReservationItem
 
@@ -320,7 +328,7 @@ func TestReserveItems_ItemsSortedByProductID(t *testing.T) {
 		},
 	}
 
-	uc := NewReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc, logger)
+	uc := newTestReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc)
 
 	items := []dto.ReservationItem{
 		{ProductID: 3, Quantity: 10, Price: 100.0},
@@ -354,7 +362,6 @@ func TestReserveItems_ItemsSortedByProductID(t *testing.T) {
 
 func TestReserveItems_DeadlockRetry(t *testing.T) {
 	ctx := context.Background()
-	logger := zap.NewNop()
 
 	attemptCount := 0
 
@@ -392,7 +399,7 @@ func TestReserveItems_DeadlockRetry(t *testing.T) {
 		},
 	}
 
-	uc := NewReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc, logger)
+	uc := newTestReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc)
 
 	items := []dto.ReservationItem{
 		{ProductID: 1, Quantity: 10, Price: 100.0},
@@ -415,7 +422,6 @@ func TestReserveItems_DeadlockRetry(t *testing.T) {
 
 func TestReserveItems_DeadlockMaxRetries(t *testing.T) {
 	ctx := context.Background()
-	logger := zap.NewNop()
 
 	attemptCount := 0
 
@@ -446,7 +452,7 @@ func TestReserveItems_DeadlockMaxRetries(t *testing.T) {
 		},
 	}
 
-	uc := NewReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc, logger)
+	uc := newTestReserveAndAddUseCase(orderRepo, companyConfigRepo, reservationSvc)
 
 	items := []dto.ReservationItem{
 		{ProductID: 1, Quantity: 10, Price: 100.0},
